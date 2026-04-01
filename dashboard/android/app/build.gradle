@@ -1,0 +1,31 @@
+android {
+    namespace = "com.kaapav.kaapav_ad_engine"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_11
+    }
+
+    defaultConfig {
+        applicationId = "com.kaapav.kaapav_ad_engine"
+        minSdk = 24              // Android 7.0+ (S23 Ultra is Android 14)
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        multiDexEnabled = true
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.debug  // Change for production
+            minifyEnabled = true
+            shrinkResources = true
+        }
+    }
+}

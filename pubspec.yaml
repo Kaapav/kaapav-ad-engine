@@ -1,0 +1,52 @@
+name: kaapav_ad_engine
+description: "Kaapav Ad Engine - Meta Ads Manager for Kaapav Fashion Jewellery"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_fonts: ^6.2.1
+  fl_chart: ^0.70.2
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.8.1
+  dio: ^5.8.0+1
+  hive_flutter: ^1.1.0
+  hive: ^2.2.3
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.5.3
+  firebase_core: ^3.12.1
+  firebase_messaging: ^15.2.1
+  http: ^1.3.0
+  intl: ^0.20.2
+  url_launcher: ^6.3.1
+  shimmer: ^3.0.0
+  cached_network_image: ^3.4.1
+  flutter_local_notifications: ^18.0.1
+  path_provider: ^2.1.5
+  uuid: ^4.5.1
+  timeago: ^3.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
+  fonts:
+    - family: Sora
+      fonts:
+        - asset: assets/fonts/sora/Sora-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/sora/Sora-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/sora/Sora-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/sora/Sora-Bold.ttf
+          weight: 700

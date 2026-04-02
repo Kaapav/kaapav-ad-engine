@@ -1,23 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- INTERNET — required for API calls -->
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- NETWORK STATE — check connectivity -->
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <!-- VIBRATE — for notifications -->
-    <uses-permission android:name="android.permission.VIBRATE"/>
-    <!-- RECEIVE NOTIFICATIONS -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- WAKE LOCK — keep alive for real-time data -->
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
-
-    <application
-        android:label="KAAPAV Ad Engine"
-        android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true"
-
     <application
         android:label="kaapav_ad_engine"
         android:name="${applicationName}"

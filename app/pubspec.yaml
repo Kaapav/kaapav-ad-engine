@@ -1,0 +1,69 @@
+name: kaapav_ad_engine
+description: "Kaapav Ad Engine - Meta Ads Manager for Kaapav Fashion Jewellery"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_fonts: ^6.2.1
+  fl_chart: ^0.70.2
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.8.1
+  dio: ^5.8.0+1
+  hive_flutter: ^1.1.0
+  hive: ^2.2.3
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.5.3
+  http: ^1.3.0
+  intl: ^0.20.2
+  url_launcher: ^6.3.1
+  shimmer: ^3.0.0
+  cached_network_image: ^3.4.1
+  path_provider: ^2.1.5
+  uuid: ^4.5.1
+  timeago: ^3.7.0
+
+ # Firebase
+  firebase_core: ^3.12.1
+  firebase_messaging: ^15.2.1
+  flutter_local_notifications: ^18.0.1
+  
+  # Device info for FCM registration
+  device_info_plus: ^11.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_native_splash: ^2.4.4
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
+    - assets/fonts/sora/
+    
+flutter_native_splash:
+  color: "#020B14"
+  image: "assets/icons/splash_logo.png"
+  android_12:
+    color: "#020B14"
+    icon_background_color: "#020B14"
+    image: "assets/icons/splash_logo.png"
+  ios: true
+  android: true
+  
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/app_icon.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#020B14"
+  adaptive_icon_foreground: "assets/icons/app_icon_fg.png"
+  web:
+    generate: false

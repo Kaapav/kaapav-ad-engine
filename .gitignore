@@ -1,11 +1,72 @@
-.dart_tool/
-.packages
-build/
-*.iml
-.idea/
-.vscode/
+# ══════════════════════════════════════
+# KAAPAV AD ENGINE — ROOT GITIGNORE
+# ══════════════════════════════════════
+
+# ── Secrets / Env ──
+*.env
 .env
-*.g.dart
-*.freezed.dart
+.env.*
+.dev.vars
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+key.properties
+google-services.json
+GoogleService-Info.plist
+firebase_options.dart
+service-account.json
+firebase-adminsdk-*.json
+
+# ── Flutter (app/) ──
+app/.dart_tool/
+app/.packages
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.metadata
+app/android/.gradle/
+app/android/local.properties
+app/android/app/build/
+app/android/app/google-services.json
+app/android/key.properties
+app/android/app/*.jks
+app/android/app/*.keystore
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+app/ios/Runner/GoogleService-Info.plist
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/flutter_export_environment.sh
+app/.idea/
+app/*.iml
+
+# ── Worker ──
+worker/node_modules/
+worker/dist/
+worker/.wrangler/
+worker/.dev.vars
+worker/.mf/
+
+# ── Root old Flutter leftovers ──
+.dart_tool/
+build/
+.metadata
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# ── IDE / OS / Logs ──
 .DS_Store
 Thumbs.db
+*.log
+*.tmp
+*.bak
+*~
+.vscode/settings.json
+.idea/
+
+# ── Project helper files ──
+project_tree.txt
+lib_tree.txt

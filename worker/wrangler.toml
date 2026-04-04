@@ -1,0 +1,28 @@
+name = "kaapav-ad-engine-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true         
+preview_urls = false       
+
+[vars]
+ENVIRONMENT = "production"
+META_API_VERSION = "v21.0"
+WHATSAPP_BOT_URL = "https://wa.kaapav.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kaapav-ad-engine-db"
+database_id = "7fbcec45-1134-4bd7-a16f-2538d87a2b28"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "101d533e58a349ce839db15d0d62b693"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "fc1aff42a40d4b728fbb0dc2b9fc2df3"
+
+[triggers]
+crons = ["0 */6 * * *", "0 8 * * *", "0 */2 * * *"]

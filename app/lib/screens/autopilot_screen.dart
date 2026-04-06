@@ -1,19 +1,22 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../core/theme.dart';
 import '../core/utils.dart';
 import '../models/rule.dart';
 import '../providers/app_providers.dart';
-import '../widgets/glass_card.dart';
-import '../widgets/rule_card.dart';
 import '../widgets/buttons.dart';
+import '../widgets/glass_card.dart';
 import '../widgets/inputs.dart';
-import '../widgets/loading.dart';
+import '../widgets/rule_card.dart';
+import '../widgets/empty_state.dart';
 
 class AutoPilotScreen extends ConsumerStatefulWidget {
   const AutoPilotScreen({super.key});
+
   @override
   ConsumerState<AutoPilotScreen> createState() => _AutoPilotScreenState();
 }
@@ -27,8 +30,9 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
   void initState() {
     super.initState();
     _bgC = AnimationController(
-        vsync: this, duration: const Duration(seconds: 8))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    )..repeat(reverse: true);
   }
 
   @override
@@ -37,13 +41,28 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     super.dispose();
   }
 
+  Future<void> _refresh() async {
+    await ref.read(rulesProvider.notifier).refresh();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('✅ AutoPilot refreshed'),
+        backgroundColor: C.success,
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final rules = ref.watch(rulesProvider);
-    final activityLog = ref.watch(activityLogProvider);
+    final rulesAsync = ref.watch(rulesProvider);
+    final activityLogAsync = ref.watch(activityLogProvider);
+
+    final rules = rulesAsync.valueOrNull ?? const <AutoRule>[];
     final activeRules = rules.where((r) => r.enabled).length;
-    final totalTriggers =
-        rules.fold<int>(0, (s, r) => s + r.triggeredCount);
+    final totalTriggers = rules.fold<int>(0, (s, r) => s + r.triggeredCount);
 
     return Scaffold(
       backgroundColor: C.bgDeep,
@@ -55,7 +74,9 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   center: Alignment(
-                      0.3 - _bgC.value * 0.4, -0.6 + _bgC.value * 0.3),
+                    0.3 - _bgC.value * 0.4,
+                    -0.6 + _bgC.value * 0.3,
+                  ),
                   radius: 1.5,
                   colors: [
                     C.gold.withValues(alpha: 0.05),
@@ -75,9 +96,14 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                 _viewToggle(),
                 const SizedBox(height: 8),
                 Expanded(
-                  child: _viewMode == 0
-                      ? _rulesView(rules)
-                      : _activityView(activityLog),
+                  child: RefreshIndicator(
+                    onRefresh: _refresh,
+                    color: C.primary,
+                    backgroundColor: C.bgCard,
+                    child: _viewMode == 0
+                        ? _rulesAsyncView(rulesAsync)
+                        : _activityAsyncView(activityLogAsync),
+                  ),
                 ),
               ],
             ),
@@ -96,21 +122,28 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('AutoPilot',
-                    style: TextStyle(
-                        color: C.textPrimary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700)),
-                Text('Automated rules & campaign actions',
-                    style:
-                        TextStyle(color: C.textSecondary, fontSize: 12)),
+                Text(
+                  'AutoPilot',
+                  style: TextStyle(
+                    color: C.textPrimary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Automated rules & campaign actions',
+                  style: TextStyle(
+                    color: C.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
               ],
             ),
           ),
           OutlineBtn(
             label: 'New Rule',
             icon: Icons.add_rounded,
-            onTap: () => _showCreateRule(),
+            onTap: _showCreateRule,
           ),
         ],
       ),
@@ -118,6 +151,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
   }
 
   Widget _statsBar(int active, int total, int triggers) {
+    final savedEstimate = triggers * 300.0;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: GlassCard(
@@ -126,14 +161,26 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _statItem('Active', '$active/$total', C.success,
-                Icons.toggle_on_rounded),
-            Container(width: 1, height: 28, color: C.glassBorder),
-            _statItem('Triggers', '$triggers', C.purple,
-                Icons.electric_bolt_rounded),
+            _statItem(
+              'Active',
+              '$active/$total',
+              C.success,
+              Icons.toggle_on_rounded,
+            ),
             Container(width: 1, height: 28, color: C.glassBorder),
             _statItem(
-                'Saved', '₹12.4K', C.gold, Icons.savings_rounded),
+              'Triggers',
+              '$triggers',
+              C.purple,
+              Icons.electric_bolt_rounded,
+            ),
+            Container(width: 1, height: 28, color: C.glassBorder),
+            _statItem(
+              'Saved',
+              U.money(savedEstimate),
+              C.gold,
+              Icons.savings_rounded,
+            ),
           ],
         ),
       ),
@@ -141,17 +188,31 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
   }
 
   Widget _statItem(
-      String label, String value, Color color, IconData icon) {
+    String label,
+    String value,
+    Color color,
+    IconData icon,
+  ) {
     return Column(
       children: [
         Icon(icon, color: color, size: 18),
         const SizedBox(height: 4),
-        Text(value,
-            style: TextStyle(
-                color: color, fontSize: 15, fontWeight: FontWeight.w700)),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         const SizedBox(height: 2),
-        Text(label,
-            style: const TextStyle(color: C.textMuted, fontSize: 10)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: C.textMuted,
+            fontSize: 10,
+          ),
+        ),
       ],
     );
   }
@@ -163,9 +224,10 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         children: [
           Container(
             decoration: BoxDecoration(
-                color: C.bgCard,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: C.glassBorder)),
+              color: C.bgCard,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: C.glassBorder),
+            ),
             child: Row(
               children: [
                 _toggleBtn(0, Icons.rule_rounded, 'Rules'),
@@ -184,29 +246,47 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     return GestureDetector(
       onTap: () => setState(() => _viewMode = index),
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-            gradient: sel ? C.primaryGrad : null,
-            borderRadius: BorderRadius.circular(8)),
+          gradient: sel ? C.primaryGrad : null,
+          borderRadius: BorderRadius.circular(8),
+        ),
         child: Row(
           children: [
-            Icon(icon,
-                color: sel ? Colors.black : C.textMuted, size: 14),
+            Icon(
+              icon,
+              color: sel ? Colors.black : C.textMuted,
+              size: 14,
+            ),
             const SizedBox(width: 4),
-            Text(label,
-                style: TextStyle(
-                    color: sel ? Colors.black : C.textMuted,
-                    fontSize: 11,
-                    fontWeight:
-                        sel ? FontWeight.w700 : FontWeight.w400)),
+            Text(
+              label,
+              style: TextStyle(
+                color: sel ? Colors.black : C.textMuted,
+                fontSize: 11,
+                fontWeight: sel ? FontWeight.w700 : FontWeight.w400,
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  // ═══ RULES VIEW ═══
+  Widget _rulesAsyncView(AsyncValue<List<AutoRule>> rulesAsync) {
+    return rulesAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: C.primary),
+      ),
+      error: (error, _) => _errorState(
+        title: 'Unable to load rules',
+        message: error.toString(),
+        onRetry: () => ref.read(rulesProvider.notifier).load(),
+      ),
+      data: (rules) => _rulesView(rules),
+    );
+  }
+
   Widget _rulesView(List<AutoRule> rules) {
     if (rules.isEmpty) {
       return EmptyState(
@@ -214,7 +294,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         title: 'No rules yet',
         subtitle: 'Create your first automation rule',
         actionLabel: 'Create Rule',
-        onAction: () => _showCreateRule(),
+        onAction: _showCreateRule,
       );
     }
 
@@ -229,11 +309,11 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
           child: Dismissible(
             key: Key(rule.id),
             direction: DismissDirection.endToStart,
-            confirmDismiss: (direction) async {
-              return await _showDeleteConfirm(rule.name);
-            },
-            onDismissed: (_) {
-              ref.read(rulesProvider.notifier).deleteRule(rule.id);
+            confirmDismiss: (_) async => _showDeleteConfirm(rule.name),
+            onDismissed: (_) async {
+              await ref.read(rulesProvider.notifier).deleteRule(rule.id);
+
+              if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text('Rule "${rule.name}" deleted'),
@@ -248,23 +328,24 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                 gradient: C.dangerGrad,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: const Icon(Icons.delete_outline_rounded,
-                  color: Colors.white, size: 24),
+              child: const Icon(
+                Icons.delete_outline_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
             ),
             child: RuleCard(
               name: rule.name,
-              condition:
-                  'IF ${rule.metric} ${rule.operator} ${rule.threshold}',
-              action:
-                  '${rule.actionType.toUpperCase()}${rule.actionValue != null ? ' ${rule.actionValue}' : ''}',
+              condition: rule.condition,
+              action: rule.action,
               enabled: rule.enabled,
               triggeredCount: rule.triggeredCount,
               lastTriggered: rule.lastTriggered != null
                   ? U.ago(rule.lastTriggered!)
                   : null,
-              onToggle: (bool _) {
+              onToggle: (_) async {
                 HapticFeedback.lightImpact();
-                ref.read(rulesProvider.notifier).toggle(rule.id);
+                await ref.read(rulesProvider.notifier).toggle(rule.id);
               },
             ),
           ),
@@ -279,9 +360,12 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       builder: (ctx) => AlertDialog(
         backgroundColor: C.bgCard,
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
-        title: const Text('Delete Rule',
-            style: TextStyle(color: C.textPrimary)),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: const Text(
+          'Delete Rule',
+          style: TextStyle(color: C.textPrimary),
+        ),
         content: Text(
           'Are you sure you want to delete "$name"?',
           style: const TextStyle(color: C.textSecondary),
@@ -289,19 +373,37 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel',
-                style: TextStyle(color: C.textSecondary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: C.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Delete', style: TextStyle(color: C.error)),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: C.error),
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ═══ ACTIVITY VIEW ═══
+  Widget _activityAsyncView(AsyncValue<List<ActivityEntry>> activityAsync) {
+    return activityAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: C.primary),
+      ),
+      error: (error, _) => _errorState(
+        title: 'Unable to load activity',
+        message: error.toString(),
+        onRetry: () {},
+      ),
+      data: (logs) => _activityView(logs),
+    );
+  }
+
   Widget _activityView(List<ActivityEntry> logs) {
     if (logs.isEmpty) {
       return const EmptyState(
@@ -324,25 +426,30 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
   }
 
   Widget _activityItem(ActivityEntry entry, bool isLast) {
-    Color color;
-    IconData icon;
+    late final Color color;
+    late final IconData icon;
 
     switch (entry.type) {
       case 'scale':
         color = C.success;
         icon = Icons.trending_up_rounded;
+        break;
       case 'pause':
         color = C.error;
         icon = Icons.pause_circle_rounded;
+        break;
       case 'alert':
         color = C.warning;
         icon = Icons.warning_amber_rounded;
+        break;
       case 'budget':
         color = C.blue;
         icon = Icons.account_balance_wallet_rounded;
+        break;
       case 'reduce':
         color = C.purple;
         icon = Icons.trending_down_rounded;
+        break;
       default:
         color = C.info;
         icon = Icons.info_rounded;
@@ -363,8 +470,9 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                     color: color.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                     border: Border.all(
-                        color: color.withValues(alpha: 0.4),
-                        width: 1.5),
+                      color: color.withValues(alpha: 0.4),
+                      width: 1.5,
+                    ),
                   ),
                   child: Icon(icon, color: color, size: 16),
                 ),
@@ -372,8 +480,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                   Expanded(
                     child: Container(
                       width: 1.5,
-                      margin:
-                          const EdgeInsets.symmetric(vertical: 4),
+                      margin: const EdgeInsets.symmetric(vertical: 4),
                       color: C.glassBorder,
                     ),
                   ),
@@ -393,15 +500,20 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                     Row(
                       children: [
                         Expanded(
-                          child: Text(entry.title,
-                              style: const TextStyle(
-                                  color: C.textPrimary,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600)),
+                          child: Text(
+                            entry.title,
+                            style: const TextStyle(
+                              color: C.textPrimary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
                           decoration: BoxDecoration(
                             color: color.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(6),
@@ -409,22 +521,31 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                           child: Text(
                             entry.type.toUpperCase(),
                             style: TextStyle(
-                                color: color,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.5),
+                              color: color,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(entry.description,
-                        style: const TextStyle(
-                            color: C.textSecondary, fontSize: 11)),
+                    Text(
+                      entry.description,
+                      style: const TextStyle(
+                        color: C.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
                     const SizedBox(height: 6),
-                    Text(U.ago(entry.timestamp),
-                        style: const TextStyle(
-                            color: C.textMuted, fontSize: 10)),
+                    Text(
+                      U.ago(entry.timestamp),
+                      style: const TextStyle(
+                        color: C.textMuted,
+                        fontSize: 10,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -435,28 +556,64 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     );
   }
 
-  // ═══ CREATE RULE SHEET ═══
   void _showCreateRule() {
     HapticFeedback.mediumImpact();
+
     final nameCtrl = TextEditingController();
     final thresholdCtrl = TextEditingController();
     final actionValueCtrl = TextEditingController();
+
     String selectedMetric = 'roas';
     String selectedOperator = '<';
     String selectedAction = 'pause';
 
     final metrics = [
-      'roas', 'cpa', 'ctr', 'cpc', 'cpm',
-      'frequency', 'spend', 'budget_util',
-      'impressions', 'clicks', 'conversions',
+      'roas',
+      'cpa',
+      'ctr',
+      'cpc',
+      'cpm',
+      'frequency',
+      'spend',
+      'budget_util',
+      'impressions',
+      'clicks',
+      'conversions',
     ];
+
     final operators = ['<', '>', '<=', '>=', '==', '!='];
+
     final actions = [
-      {'key': 'pause', 'label': 'Pause Campaign', 'icon': Icons.pause_circle_rounded, 'color': C.error},
-      {'key': 'scale_budget', 'label': 'Scale Budget (+%)', 'icon': Icons.trending_up_rounded, 'color': C.success},
-      {'key': 'reduce_budget', 'label': 'Reduce Budget (-%)', 'icon': Icons.trending_down_rounded, 'color': C.purple},
-      {'key': 'alert', 'label': 'Send Alert', 'icon': Icons.notifications_active_rounded, 'color': C.warning},
-      {'key': 'alert_and_pause', 'label': 'Alert & Pause', 'icon': Icons.warning_amber_rounded, 'color': C.pink},
+      {
+        'key': 'pause',
+        'label': 'Pause Campaign',
+        'icon': Icons.pause_circle_rounded,
+        'color': C.error,
+      },
+      {
+        'key': 'scale_budget',
+        'label': 'Scale Budget (+%)',
+        'icon': Icons.trending_up_rounded,
+        'color': C.success,
+      },
+      {
+        'key': 'reduce_budget',
+        'label': 'Reduce Budget (-%)',
+        'icon': Icons.trending_down_rounded,
+        'color': C.purple,
+      },
+      {
+        'key': 'alert',
+        'label': 'Send Alert',
+        'icon': Icons.notifications_active_rounded,
+        'color': C.warning,
+      },
+      {
+        'key': 'alert_and_pause',
+        'label': 'Alert & Pause',
+        'icon': Icons.warning_amber_rounded,
+        'color': C.pink,
+      },
     ];
 
     showModalBottomSheet(
@@ -470,7 +627,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
           minChildSize: 0.5,
           builder: (ctx, scrollCtrl) => ClipRRect(
             borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(24)),
+              top: Radius.circular(24),
+            ),
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
               child: Container(
@@ -481,7 +639,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                     colors: [C.bgCard, C.bgDeep],
                   ),
                   borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(24)),
+                    top: Radius.circular(24),
+                  ),
                   border: Border.all(color: C.glassBorder),
                 ),
                 child: ListView(
@@ -493,24 +652,29 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                         width: 40,
                         height: 4,
                         decoration: BoxDecoration(
-                            color: C.glassBorder,
-                            borderRadius: BorderRadius.circular(2)),
+                          color: C.glassBorder,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 20),
-                    const Text('Create Rule',
-                        style: TextStyle(
-                            color: C.textPrimary,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700)),
+                    const Text(
+                      'Create Rule',
+                      style: TextStyle(
+                        color: C.textPrimary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     const SizedBox(height: 4),
                     const Text(
-                        'Automate campaign actions based on performance',
-                        style: TextStyle(
-                            color: C.textSecondary, fontSize: 12)),
+                      'Automate campaign actions based on performance',
+                      style: TextStyle(
+                        color: C.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
                     const SizedBox(height: 24),
-
-                    // NAME
                     GlassInput(
                       label: 'Rule Name',
                       hint: 'e.g. Kill Low ROAS',
@@ -518,43 +682,49 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                       prefixIcon: Icons.label_rounded,
                     ),
                     const SizedBox(height: 24),
-
-                    // IF SECTION
                     GlassCard(
                       child: Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
                                   gradient: C.primaryGrad,
-                                  borderRadius:
-                                      BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: const Text('IF',
-                                    style: TextStyle(
-                                        color: Colors.black,
-                                        fontSize: 12,
-                                        fontWeight:
-                                            FontWeight.w800)),
+                                child: const Text(
+                                  'IF',
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
                               ),
                               const SizedBox(width: 10),
-                              const Text('Condition',
-                                  style: TextStyle(
-                                      color: C.textSecondary,
-                                      fontSize: 12)),
+                              const Text(
+                                'Condition',
+                                style: TextStyle(
+                                  color: C.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 14),
-                          const Text('Metric',
-                              style: TextStyle(
-                                  color: C.textMuted,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500)),
+                          const Text(
+                            'Metric',
+                            style: TextStyle(
+                              color: C.textMuted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                           const SizedBox(height: 8),
                           Wrap(
                             spacing: 6,
@@ -562,103 +732,90 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                             children: metrics.map((m) {
                               final sel = selectedMetric == m;
                               return GestureDetector(
-                                onTap: () => setSheetState(
-                                    () => selectedMetric = m),
+                                onTap: () =>
+                                    setSheetState(() => selectedMetric = m),
                                 child: Container(
-                                  padding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: sel
-                                        ? C.primary.withValues(
-                                            alpha: 0.15)
+                                        ? C.primary.withValues(alpha: 0.15)
                                         : C.glassWhite,
-                                    borderRadius:
-                                        BorderRadius.circular(8),
+                                    borderRadius: BorderRadius.circular(8),
                                     border: Border.all(
-                                        color: sel
-                                            ? C.primary.withValues(
-                                                alpha: 0.5)
-                                            : C.glassBorder),
+                                      color: sel
+                                          ? C.primary.withValues(alpha: 0.5)
+                                          : C.glassBorder,
+                                    ),
                                   ),
                                   child: Text(
                                     m.toUpperCase(),
                                     style: TextStyle(
-                                        color: sel
-                                            ? C.primary
-                                            : C.textSecondary,
-                                        fontSize: 10,
-                                        fontWeight:
-                                            FontWeight.w600),
+                                      color:
+                                          sel ? C.primary : C.textSecondary,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
                               );
                             }).toList(),
                           ),
                           const SizedBox(height: 16),
-
-                          // OPERATOR + THRESHOLD
                           Row(
                             children: [
-                              // OPERATOR CHIPS
                               Expanded(
                                 flex: 2,
                                 child: Column(
                                   crossAxisAlignment:
                                       CrossAxisAlignment.start,
                                   children: [
-                                    const Text('Operator',
-                                        style: TextStyle(
-                                            color: C.textMuted,
-                                            fontSize: 11)),
+                                    const Text(
+                                      'Operator',
+                                      style: TextStyle(
+                                        color: C.textMuted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
                                     const SizedBox(height: 6),
                                     Wrap(
                                       spacing: 4,
                                       runSpacing: 4,
-                                      children:
-                                          operators.map((op) {
-                                        final sel =
-                                            selectedOperator ==
-                                                op;
+                                      children: operators.map((op) {
+                                        final sel = selectedOperator == op;
                                         return GestureDetector(
-                                          onTap: () =>
-                                              setSheetState(() =>
-                                                  selectedOperator =
-                                                      op),
+                                          onTap: () => setSheetState(
+                                            () => selectedOperator = op,
+                                          ),
                                           child: Container(
-                                            padding:
-                                                const EdgeInsets
-                                                    .symmetric(
-                                                    horizontal:
-                                                        10,
-                                                    vertical: 6),
-                                            decoration:
-                                                BoxDecoration(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 6,
+                                            ),
+                                            decoration: BoxDecoration(
                                               color: sel
-                                                  ? C.primary
-                                                      .withValues(
-                                                          alpha:
-                                                              0.15)
+                                                  ? C.primary.withValues(alpha: 0.15)
                                                   : C.glassWhite,
                                               borderRadius:
-                                                  BorderRadius
-                                                      .circular(
-                                                          6),
+                                                  BorderRadius.circular(6),
                                               border: Border.all(
-                                                  color: sel
-                                                      ? C.primary
-                                                      : C.glassBorder),
+                                                color: sel
+                                                    ? C.primary
+                                                    : C.glassBorder,
+                                              ),
                                             ),
-                                            child: Text(op,
-                                                style: TextStyle(
-                                                    color: sel
-                                                        ? C.primary
-                                                        : C.textSecondary,
-                                                    fontSize: 12,
-                                                    fontWeight:
-                                                        FontWeight
-                                                            .w700)),
+                                            child: Text(
+                                              op,
+                                              style: TextStyle(
+                                                color: sel
+                                                    ? C.primary
+                                                    : C.textSecondary,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
                                           ),
                                         );
                                       }).toList(),
@@ -674,9 +831,9 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                                   hint: 'e.g. 2.0',
                                   controller: thresholdCtrl,
                                   keyboardType:
-                                      const TextInputType
-                                          .numberWithOptions(
-                                          decimal: true),
+                                      const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
                                   prefixIcon: Icons.speed_rounded,
                                 ),
                               ),
@@ -686,74 +843,72 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                       ),
                     ),
                     const SizedBox(height: 16),
-
-                    // THEN SECTION
                     GlassCard(
                       child: Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
                                   color: C.gold,
-                                  borderRadius:
-                                      BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: const Text('THEN',
-                                    style: TextStyle(
-                                        color: Colors.black,
-                                        fontSize: 12,
-                                        fontWeight:
-                                            FontWeight.w800)),
+                                child: const Text(
+                                  'THEN',
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
                               ),
                               const SizedBox(width: 10),
-                              const Text('Action',
-                                  style: TextStyle(
-                                      color: C.textSecondary,
-                                      fontSize: 12)),
+                              const Text(
+                                'Action',
+                                style: TextStyle(
+                                  color: C.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 14),
                           ...actions.map((a) {
-                            final sel = selectedAction ==
-                                a['key'] as String;
+                            final sel = selectedAction == a['key'] as String;
                             return GestureDetector(
-                              onTap: () => setSheetState(() =>
-                                  selectedAction =
-                                      a['key'] as String),
+                              onTap: () => setSheetState(
+                                () => selectedAction = a['key'] as String,
+                              ),
                               child: Container(
-                                margin: const EdgeInsets.only(
-                                    bottom: 8),
-                                padding:
-                                    const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 10),
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
                                 decoration: BoxDecoration(
                                   color: sel
                                       ? (a['color'] as Color)
                                           .withValues(alpha: 0.1)
                                       : Colors.transparent,
-                                  borderRadius:
-                                      BorderRadius.circular(12),
+                                  borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
-                                      color: sel
-                                          ? (a['color'] as Color)
-                                              .withValues(
-                                                  alpha: 0.4)
-                                          : C.glassBorder),
+                                    color: sel
+                                        ? (a['color'] as Color)
+                                            .withValues(alpha: 0.4)
+                                        : C.glassBorder,
+                                  ),
                                 ),
                                 child: Row(
                                   children: [
                                     Icon(
                                       sel
-                                          ? Icons
-                                              .radio_button_checked
-                                          : Icons
-                                              .radio_button_off,
+                                          ? Icons.radio_button_checked
+                                          : Icons.radio_button_off,
                                       color: sel
                                           ? a['color'] as Color
                                           : C.textMuted,
@@ -761,22 +916,24 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                                     ),
                                     const SizedBox(width: 10),
                                     Icon(
-                                        a['icon'] as IconData,
-                                        color: sel
-                                            ? a['color'] as Color
-                                            : C.textMuted,
-                                        size: 18),
+                                      a['icon'] as IconData,
+                                      color: sel
+                                          ? a['color'] as Color
+                                          : C.textMuted,
+                                      size: 18,
+                                    ),
                                     const SizedBox(width: 8),
                                     Text(
                                       a['label'] as String,
                                       style: TextStyle(
-                                          color: sel
-                                              ? C.textPrimary
-                                              : C.textSecondary,
-                                          fontSize: 13,
-                                          fontWeight: sel
-                                              ? FontWeight.w600
-                                              : FontWeight.w400),
+                                        color: sel
+                                            ? C.textPrimary
+                                            : C.textSecondary,
+                                        fontSize: 13,
+                                        fontWeight: sel
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -784,15 +941,13 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                             );
                           }),
                           if (selectedAction == 'scale_budget' ||
-                              selectedAction ==
-                                  'reduce_budget') ...[
+                              selectedAction == 'reduce_budget') ...[
                             const SizedBox(height: 8),
                             GlassInput(
                               label: 'Percentage (%)',
                               hint: 'e.g. 20',
                               controller: actionValueCtrl,
-                              keyboardType:
-                                  TextInputType.number,
+                              keyboardType: TextInputType.number,
                               prefixIcon: Icons.percent_rounded,
                             ),
                           ],
@@ -800,59 +955,73 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                       ),
                     ),
                     const SizedBox(height: 24),
-
-                    // CREATE BUTTON
                     PrimaryBtn(
                       label: '⚡ Create Rule',
-                      onTap: () {
-                        if (nameCtrl.text.isEmpty ||
-                            thresholdCtrl.text.isEmpty) {
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(
+                      onTap: () async {
+                        if (nameCtrl.text.trim().isEmpty ||
+                            thresholdCtrl.text.trim().isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: const Text(
-                                  'Please fill name and threshold'),
+                                'Please fill name and threshold',
+                              ),
                               backgroundColor: C.error,
                             ),
                           );
                           return;
                         }
 
+                        final threshold =
+                            double.tryParse(thresholdCtrl.text.trim());
+                        if (threshold == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: const Text(
+                                'Threshold must be a valid number',
+                              ),
+                              backgroundColor: C.error,
+                            ),
+                          );
+                          return;
+                        }
+
+                        final actionValue = actionValueCtrl.text.trim().isNotEmpty
+                            ? actionValueCtrl.text.trim()
+                            : null;
+
                         final rule = AutoRule(
-                          id: 'r${DateTime.now().millisecondsSinceEpoch}',
+                          id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
                           name: nameCtrl.text.trim(),
                           condition:
-                              '${selectedMetric.toUpperCase()} $selectedOperator ${thresholdCtrl.text}',
+                              '${selectedMetric.toUpperCase()} $selectedOperator $threshold',
                           action:
-                              '${selectedAction.replaceAll('_', ' ')}${actionValueCtrl.text.isNotEmpty ? ' ${actionValueCtrl.text}%' : ''}',
+                              '${selectedAction.replaceAll('_', ' ')}${actionValue != null ? ' $actionValue%' : ''}',
                           metric: selectedMetric,
                           operator: selectedOperator,
-                          threshold:
-                              double.tryParse(
-                                      thresholdCtrl.text) ??
-                                  0,
+                          threshold: threshold,
                           actionType: selectedAction,
-                          actionValue:
-                              actionValueCtrl.text.isNotEmpty
-                                  ? actionValueCtrl.text
-                                  : null,
+                          actionValue: actionValue,
                           enabled: true,
                           triggeredCount: 0,
                         );
 
-                        ref
-                            .read(rulesProvider.notifier)
-                            .addRule(rule);
-                        Navigator.pop(ctx);
-                        HapticFeedback.heavyImpact();
-                        ScaffoldMessenger.of(context)
-                            .showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                '⚡ Rule "${rule.name}" created'),
-                            backgroundColor: C.success,
-                          ),
-                        );
+await ref.read(rulesProvider.notifier).addRule(rule);
+
+if (!ctx.mounted) return;
+final navigator = Navigator.of(ctx);
+final messenger = ScaffoldMessenger.of(ctx);
+final ruleName = rule.name;
+
+navigator.pop();
+
+HapticFeedback.heavyImpact();
+
+messenger.showSnackBar(
+  SnackBar(
+    content: Text('⚡ Rule "$ruleName" created'),
+    backgroundColor: C.success,
+  ),
+);
                       },
                     ),
                     const SizedBox(height: 20),
@@ -863,6 +1032,59 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _errorState({
+    required String title,
+    required String message,
+    required VoidCallback onRetry,
+  }) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(24),
+          child: GlassCard(
+            radius: 18,
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  color: C.error,
+                  size: 28,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: C.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: C.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                OutlineBtn(
+                  label: 'Retry',
+                  icon: Icons.refresh_rounded,
+                  onTap: onRetry,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

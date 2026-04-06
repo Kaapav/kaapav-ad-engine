@@ -4,6 +4,8 @@ import '../widgets/glass_nav.dart';
 import 'dashboard_screen.dart';
 import 'campaigns_screen.dart';
 import 'crm_screen.dart';
+import 'autopilot_screen.dart';   
+import 'more_screen.dart';         
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -38,8 +40,10 @@ class _MainShellState extends State<MainShell> {
         index: _tab,
         children: [
           const DashboardScreen(),
-          const CampaignsScreen(),       // ✅ WIRED
-          const CrmScreen(),              // ✅ WIRED
+          const CampaignsScreen(),       
+          const CrmScreen(),   
+          const AutoPilotScreen(),  
+	  const MoreScreen(),         
           _placeholder('AutoPilot', Icons.auto_awesome_rounded),
           _placeholder('More', Icons.menu_rounded),
         ],

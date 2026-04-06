@@ -1,229 +1,528 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../services/meta_api.dart';
-import '../services/notification_service.dart';
-import '../models/campaign.dart';
-import '../models/lead.dart';
+
+import '../core/env_config.dart';
 import '../models/app_settings.dart';
+import '../models/campaign.dart';
+import '../models/insights.dart';
+import '../models/lead.dart';
 import '../models/rule.dart';
-import '../data/mock_data.dart';
+import '../services/meta_auth.dart';
+import '../services/notification_service.dart';
 import '../services/worker_api.dart';
 
-// ═══ SERVICE PROVIDERS ═══
-final metaApiProvider = Provider<MetaApiService>((ref) => MetaApiService());
+// ══════════════════════════════════════════════════════════════
+// SERVICE PROVIDERS
+// ══════════════════════════════════════════════════════════════
+
 final notificationProvider =
     Provider<NotificationService>((ref) => NotificationService());
-
-// ═══ DATE PRESET ═══
-final datePresetProvider = StateProvider<String>((ref) => 'last_30d');
-
-// ═══ CAMPAIGNS ═══
-final campaignsProvider =
-    StateNotifierProvider<CampaignsNotifier, AsyncValue<List<Campaign>>>(
-        (ref) {
-  final api = ref.watch(metaApiProvider);
-  return CampaignsNotifier(api);
-});
 
 final workerApiProvider = Provider<WorkerApiService>((ref) {
   return WorkerApiService();
 });
 
-class CampaignsNotifier extends StateNotifier<AsyncValue<List<Campaign>>> {
-  final MetaApiService _api; // ignore: unused_field
+final metaAuthProvider = Provider<MetaAuth>((ref) => MetaAuth());
 
-  CampaignsNotifier(this._api) : super(const AsyncValue.loading()) {
+// ══════════════════════════════════════════════════════════════
+// DATE PRESET
+// ══════════════════════════════════════════════════════════════
+
+final datePresetProvider = StateProvider<String>((ref) => 'last_30d');
+
+// ══════════════════════════════════════════════════════════════
+// DASHBOARD / ANALYTICS PROVIDERS
+// ══════════════════════════════════════════════════════════════
+
+final dashboardSummaryProvider =
+    FutureProvider.family<InsightsSummary, String>((ref, datePreset) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getAnalyticsSummary(datePreset: datePreset);
+});
+
+final dashboardDailyProvider =
+    FutureProvider.family<List<DayInsight>, String>((ref, datePreset) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getAnalyticsDaily(datePreset: datePreset);
+});
+
+final notificationsCountProvider = FutureProvider<int>((ref) async {
+  final api = ref.watch(workerApiProvider);
+  final notifications = await api.getNotifications(limit: 50);
+  return notifications.where((n) => n['read'] != true).length;
+});
+
+final crmStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getCrmStats();
+});
+
+// ══════════════════════════════════════════════════════════════
+// CAMPAIGNS
+// ══════════════════════════════════════════════════════════════
+
+final campaignsProvider =
+    StateNotifierProvider<CampaignsNotifier, AsyncValue<List<Campaign>>>((ref) {
+  final api = ref.watch(workerApiProvider);
+  final datePreset = ref.watch(datePresetProvider);
+  return CampaignsNotifier(api, datePreset);
+});
+
+class CampaignsNotifier extends StateNotifier<AsyncValue<List<Campaign>>> {
+  final WorkerApiService _api;
+  final String _datePreset;
+
+  CampaignsNotifier(this._api, this._datePreset)
+      : super(const AsyncValue.loading()) {
     load();
   }
 
   Future<void> load() async {
-    state = const AsyncValue.loading();
-    await Future.delayed(const Duration(milliseconds: 500));
-    state = AsyncValue.data(MockData.campaigns);
+    try {
+      state = const AsyncValue.loading();
+      final campaigns = await _api.getCampaigns(datePreset: _datePreset);
+      state = AsyncValue.data(campaigns);
+    } catch (e, st) {
+      final configured = await _api.isConfigured();
+      if (!configured) {
+        state = const AsyncValue.data([]);
+      } else {
+        state = AsyncValue.error(e, st);
+      }
+    }
   }
 
   Future<void> refresh() async {
-    await Future.delayed(const Duration(seconds: 1));
-    state = AsyncValue.data(MockData.campaigns);
+    try {
+      final campaigns = await _api.getCampaigns(datePreset: _datePreset);
+      state = AsyncValue.data(campaigns);
+    } catch (e, st) {
+      final configured = await _api.isConfigured();
+      if (!configured) {
+        state = const AsyncValue.data([]);
+      } else {
+        state = AsyncValue.error(e, st);
+      }
+    }
   }
 
-  void toggleStatus(String id) {
-    state.whenData((campaigns) {
-      final updated = campaigns.map((c) {
-        if (c.id == id) {
-          final newStatus = c.isActive ? 'PAUSED' : 'ACTIVE';
-          return c.copyWith(status: newStatus);
-        }
-        return c;
-      }).toList();
-      state = AsyncValue.data(updated);
-    });
+  Future<void> toggleStatus(String id) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    Campaign? campaign;
+    for (final c in current) {
+      if (c.id == id) {
+        campaign = c;
+        break;
+      }
+    }
+    if (campaign == null) return;
+
+    final newStatus = campaign.isActive ? 'PAUSED' : 'ACTIVE';
+
+    final optimistic = current.map((c) {
+      if (c.id == id) return c.copyWith(status: newStatus);
+      return c;
+    }).toList();
+
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.updateCampaignStatus(id, newStatus);
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
   }
 
-  void scaleBudget(String id, double budget) {
-    state.whenData((campaigns) {
-      final updated = campaigns.map((c) {
-        if (c.id == id) return c.copyWith(dailyBudget: budget);
-        return c;
-      }).toList();
-      state = AsyncValue.data(updated);
-    });
+  Future<void> scaleBudget(String id, double budget) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    final optimistic = current.map((c) {
+      if (c.id == id) return c.copyWith(dailyBudget: budget);
+      return c;
+    }).toList();
+
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.updateCampaignBudget(id, dailyBudget: budget);
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
   }
 }
 
-// ═══ LEADS ═══
+// ══════════════════════════════════════════════════════════════
+// LEADS
+// ══════════════════════════════════════════════════════════════
+
 final leadsProvider =
     StateNotifierProvider<LeadsNotifier, AsyncValue<List<Lead>>>((ref) {
-  return LeadsNotifier();
+  final api = ref.watch(workerApiProvider);
+  return LeadsNotifier(api);
 });
 
 class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
-  LeadsNotifier() : super(const AsyncValue.loading()) {
+  final WorkerApiService _api;
+
+  List<Lead> _lastGoodData = const [];
+
+  LeadsNotifier(this._api) : super(const AsyncValue.loading()) {
+    load();
+  }
+
+  bool _isCancelledError(Object e) {
+    if (e is DioException) {
+      return e.type == DioExceptionType.cancel ||
+          (e.message?.toLowerCase().contains('cancel') ?? false);
+    }
+
+    final msg = e.toString().toLowerCase();
+    return msg.contains('request cancelled') ||
+        msg.contains('request canceled') ||
+        msg.contains('cancelled') ||
+        msg.contains('canceled');
+  }
+
+  Future<void> load({
+    String? stage,
+    String? search,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final previousData = state.maybeWhen(
+      data: (data) => data,
+      orElse: () => _lastGoodData,
+    );
+
+    if (previousData.isEmpty) {
+      state = const AsyncValue.loading();
+    }
+
+    try {
+      final leads = await _api.getLeads(
+        stage: stage,
+        search: search,
+        limit: limit,
+        offset: offset,
+      );
+
+      _lastGoodData = leads;
+      state = AsyncValue.data(leads);
+    } catch (e, st) {
+      if (_isCancelledError(e)) {
+        if (previousData.isNotEmpty) {
+          state = AsyncValue.data(previousData);
+        }
+        return;
+      }
+
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> refresh({
+    String? stage,
+    String? search,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final previousData = state.maybeWhen(
+      data: (data) => data,
+      orElse: () => _lastGoodData,
+    );
+
+    try {
+      final leads = await _api.getLeads(
+        stage: stage,
+        search: search,
+        limit: limit,
+        offset: offset,
+      );
+
+      _lastGoodData = leads;
+      state = AsyncValue.data(leads);
+    } catch (e, st) {
+      if (_isCancelledError(e)) {
+        if (previousData.isNotEmpty) {
+          state = AsyncValue.data(previousData);
+        }
+        return;
+      }
+
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> updateStage(String id, String stage) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    final optimistic = current.map((l) {
+      if (l.id == id) {
+        return l.copyWith(stage: stage);
+      }
+      return l;
+    }).toList();
+
+    _lastGoodData = optimistic;
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.updateLead(
+        id,
+        stage: stage,
+        activityNote: 'Stage updated to $stage',
+      );
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
+  }
+
+  Future<void> addLead(Lead lead) async {
+    try {
+      await _api.createLead(
+        name: lead.name,
+        phone: lead.phone,
+        email: lead.email,
+        campaign: lead.campaign,
+        campaignId: lead.campaignId,
+        stage: lead.stage,
+        source: lead.source,
+        product: lead.product,
+        value: lead.value ?? 0,
+        notes: lead.notes,
+      );
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> deleteLead(String id) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    final optimistic = current.where((l) => l.id != id).toList();
+    _lastGoodData = optimistic;
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.deleteLead(id);
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// RULES
+// ══════════════════════════════════════════════════════════════
+
+final rulesProvider =
+    StateNotifierProvider<RulesNotifier, AsyncValue<List<AutoRule>>>((ref) {
+  final api = ref.watch(workerApiProvider);
+  return RulesNotifier(api);
+});
+
+class RulesNotifier extends StateNotifier<AsyncValue<List<AutoRule>>> {
+  final WorkerApiService _api;
+
+  RulesNotifier(this._api) : super(const AsyncValue.loading()) {
     load();
   }
 
   Future<void> load() async {
-    state = const AsyncValue.loading();
-    await Future.delayed(const Duration(milliseconds: 500));
-    state = AsyncValue.data(MockData.leads);
+    try {
+      state = const AsyncValue.loading();
+      final rules = await _api.getRules();
+      state = AsyncValue.data(rules);
+    } catch (e, st) {
+      final configured = await _api.isConfigured();
+      if (!configured) {
+        state = const AsyncValue.data([]);
+      } else {
+        state = AsyncValue.error(e, st);
+      }
+    }
   }
 
-  void updateStage(String id, String stage) {
-    state.whenData((leads) {
-      final updated = leads.map((l) {
-        if (l.id == id) return l.copyWith(stage: stage);
-        return l;
-      }).toList();
-      state = AsyncValue.data(updated);
-    });
+  Future<void> refresh() async {
+    try {
+      final rules = await _api.getRules();
+      state = AsyncValue.data(rules);
+    } catch (e, st) {
+      final configured = await _api.isConfigured();
+      if (!configured) {
+        state = const AsyncValue.data([]);
+      } else {
+        state = AsyncValue.error(e, st);
+      }
+    }
   }
 
-  void addLead(Lead lead) {
-    state.whenData((leads) {
-      state = AsyncValue.data([lead, ...leads]);
-    });
+  Future<void> toggle(String id) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    AutoRule? rule;
+    for (final r in current) {
+      if (r.id == id) {
+        rule = r;
+        break;
+      }
+    }
+    if (rule == null) return;
+
+    final newEnabled = !rule.enabled;
+
+    final optimistic = current.map((r) {
+      if (r.id == id) return r.copyWith(enabled: newEnabled);
+      return r;
+    }).toList();
+
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.toggleRule(id, newEnabled);
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
+  }
+
+  Future<void> addRule(AutoRule rule) async {
+    try {
+      await _api.createRule(
+        name: rule.name,
+        metric: rule.metric,
+        operator: rule.operator,
+        threshold: rule.threshold,
+        actionType: rule.actionType,
+        actionValue:
+            rule.actionValue == null ? null : double.tryParse(rule.actionValue!),
+        conditionText: rule.condition,
+        actionText: rule.action,
+        enabled: rule.enabled,
+        checkInterval: int.parse((rule.checkInterval ?? 360).toString()),
+      );
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> deleteRule(String id) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    final optimistic = current.where((r) => r.id != id).toList();
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.deleteRule(id);
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
+  }
+
+  Future<void> trigger(String id) async {
+    await refresh();
   }
 }
 
-// ═══ RULES ═══
-final rulesProvider =
-    StateNotifierProvider<RulesNotifier, List<AutoRule>>((ref) {
-  return RulesNotifier();
+// ══════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ══════════════════════════════════════════════════════════════
+
+final notificationsProvider = StateNotifierProvider<
+    NotificationsNotifier, AsyncValue<List<Map<String, dynamic>>>>((ref) {
+  final api = ref.watch(workerApiProvider);
+  return NotificationsNotifier(api);
 });
 
-class RulesNotifier extends StateNotifier<List<AutoRule>> {
-  RulesNotifier() : super(_defaultRules);
+class NotificationsNotifier
+    extends StateNotifier<AsyncValue<List<Map<String, dynamic>>>> {
+  final WorkerApiService _api;
 
-  static final _defaultRules = [
-    AutoRule(
-      id: 'r001',
-      name: 'Kill Low ROAS',
-      condition: 'ROAS < 2.0',
-      action: 'Pause Campaign',
-      metric: 'roas',
-      operator: '<',
-      threshold: 2.0,
-      actionType: 'pause',
-      enabled: true,
-      triggeredCount: 3,
-      lastTriggered: DateTime.now().subtract(const Duration(days: 2)),
-    ),
-    AutoRule(
-      id: 'r002',
-      name: 'Scale Winners',
-      condition: 'ROAS > 4.0',
-      action: 'Scale Budget +20%',
-      metric: 'roas',
-      operator: '>',
-      threshold: 4.0,
-      actionType: 'scale_budget',
-      actionValue: '20',
-      enabled: true,
-      triggeredCount: 7,
-      lastTriggered: DateTime.now().subtract(const Duration(hours: 6)),
-    ),
-    AutoRule(
-      id: 'r003',
-      name: 'CPA Guardian',
-      condition: 'CPA > 250',
-      action: 'Reduce Budget -30%',
-      metric: 'cpa',
-      operator: '>',
-      threshold: 250,
-      actionType: 'reduce_budget',
-      actionValue: '30',
-      enabled: true,
-      triggeredCount: 1,
-      lastTriggered: DateTime.now().subtract(const Duration(days: 3)),
-    ),
-    AutoRule(
-      id: 'r004',
-      name: 'Frequency Cap Alert',
-      condition: 'Frequency > 3.5',
-      action: 'Alert & Pause',
-      metric: 'frequency',
-      operator: '>',
-      threshold: 3.5,
-      actionType: 'alert_and_pause',
-      enabled: true,
-      triggeredCount: 2,
-      lastTriggered: DateTime.now().subtract(const Duration(days: 1)),
-    ),
-    AutoRule(
-      id: 'r005',
-      name: 'CTR Drop Alert',
-      condition: 'CTR < 1.5',
-      action: 'Send Alert',
-      metric: 'ctr',
-      operator: '<',
-      threshold: 1.5,
-      actionType: 'alert',
-      enabled: false,
-      triggeredCount: 0,
-    ),
-    AutoRule(
-      id: 'r006',
-      name: 'Budget Utilization',
-      condition: 'Budget Util < 70',
-      action: 'Send Alert',
-      metric: 'budget_util',
-      operator: '<',
-      threshold: 70,
-      actionType: 'alert',
-      enabled: true,
-      triggeredCount: 4,
-      lastTriggered: DateTime.now().subtract(const Duration(days: 3)),
-    ),
-  ];
+  NotificationsNotifier(this._api) : super(const AsyncValue.loading()) {
+    load();
+  }
 
-  void toggle(String id) {
-    state = state.map((r) {
-      if (r.id == id) return r.copyWith(enabled: !r.enabled);
-      return r;
+  Future<void> load({int limit = 50}) async {
+    try {
+      state = const AsyncValue.loading();
+      final items = await _api.getNotifications(limit: limit);
+      state = AsyncValue.data(items);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> refresh({int limit = 50}) async {
+    try {
+      final items = await _api.getNotifications(limit: limit);
+      state = AsyncValue.data(items);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> markAllRead() async {
+    final current = state.valueOrNull ?? const <Map<String, dynamic>>[];
+
+    final optimistic = current.map((n) {
+      return {
+        ...n,
+        'read': true,
+      };
     }).toList();
+
+    state = AsyncValue.data(optimistic);
+
+    try {
+      await _api.markNotificationsRead();
+      await refresh();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      await load();
+    }
   }
 
-  void addRule(AutoRule rule) {
-    state = [...state, rule];
-  }
+  void markLocalRead(String id) {
+    final current = state.valueOrNull ?? const <Map<String, dynamic>>[];
 
-  void deleteRule(String id) {
-    state = state.where((r) => r.id != id).toList();
-  }
-
-  void trigger(String id) {
-    state = state.map((r) {
-      if (r.id == id) {
-        return r.copyWith(
-          triggeredCount: r.triggeredCount + 1,
-          lastTriggered: DateTime.now(),
-        );
+    final updated = current.map((n) {
+      if (n['id']?.toString() == id) {
+        return {
+          ...n,
+          'read': true,
+        };
       }
-      return r;
+      return n;
     }).toList();
+
+    state = AsyncValue.data(updated);
   }
 }
 
-// ═══ SETTINGS ═══
+// ══════════════════════════════════════════════════════════════
+// SETTINGS
+// ══════════════════════════════════════════════════════════════
+
 final settingsProvider =
     StateNotifierProvider<SettingsNotifier, AppSettings>((ref) {
   return SettingsNotifier();
@@ -235,79 +534,111 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   void update(AppSettings Function(AppSettings) updater) {
     state = updater(state);
   }
+
+  void reset() {
+    state = const AppSettings();
+  }
 }
 
-// ═══ ACTIVITY LOG ═══
+// ══════════════════════════════════════════════════════════════
+// ACTIVITY LOG
+// Temporary local empty source until worker endpoint exists
+// ══════════════════════════════════════════════════════════════
+
 final activityLogProvider =
-    StateNotifierProvider<ActivityLogNotifier, List<ActivityEntry>>((ref) {
+    StateNotifierProvider<ActivityLogNotifier, AsyncValue<List<ActivityEntry>>>(
+        (ref) {
   return ActivityLogNotifier();
 });
 
-class ActivityLogNotifier extends StateNotifier<List<ActivityEntry>> {
-  ActivityLogNotifier() : super(_defaultLogs);
-
-  static final _defaultLogs = [
-    ActivityEntry(
-      id: 'a001',
-      type: 'scale',
-      title: 'Scale Winners triggered',
-      description:
-          'Navratri Jewellery Sale ROAS 6.2x → Budget +20% to ₹4,200/day',
-      timestamp: DateTime.now().subtract(const Duration(hours: 6)),
-      campaignId: 'c001',
-      ruleId: 'r002',
-    ),
-    ActivityEntry(
-      id: 'a002',
-      type: 'budget',
-      title: 'Budget auto-scaled',
-      description:
-          'Temple Jewellery Collection budget ₹2,000 → ₹2,400/day',
-      timestamp: DateTime.now().subtract(const Duration(hours: 12)),
-      campaignId: 'c005',
-    ),
-    ActivityEntry(
-      id: 'a003',
-      type: 'alert',
-      title: 'Frequency alert triggered',
-      description:
-          'Reels Gold Plated Set frequency reached 3.8x — exceeds 3.5x cap',
-      timestamp: DateTime.now().subtract(const Duration(days: 1)),
-      campaignId: 'c002',
-      ruleId: 'r004',
-    ),
-    ActivityEntry(
-      id: 'a004',
-      type: 'pause',
-      title: 'Campaign auto-paused',
-      description:
-          'Test Campaign paused — ROAS dropped to 1.2x (below 2.0x threshold)',
-      timestamp: DateTime.now().subtract(const Duration(days: 2)),
-      ruleId: 'r001',
-    ),
-    ActivityEntry(
-      id: 'a005',
-      type: 'reduce',
-      title: 'CPA Guardian triggered',
-      description:
-          'Lookalike 1% Buyers CPA ₹310 → Budget reduced by 30%',
-      timestamp: DateTime.now().subtract(const Duration(days: 3)),
-      campaignId: 'c003',
-      ruleId: 'r003',
-    ),
-    ActivityEntry(
-      id: 'a006',
-      type: 'alert',
-      title: 'Low delivery alert',
-      description:
-          'WhatsApp Catalog Push only 55% budget utilization today',
-      timestamp: DateTime.now().subtract(const Duration(days: 3)),
-      campaignId: 'c008',
-      ruleId: 'r006',
-    ),
-  ];
+class ActivityLogNotifier
+    extends StateNotifier<AsyncValue<List<ActivityEntry>>> {
+  ActivityLogNotifier() : super(const AsyncValue.data([]));
 
   void add(ActivityEntry entry) {
-    state = [entry, ...state];
+    final current = state.valueOrNull ?? [];
+    state = AsyncValue.data([entry, ...current]);
+  }
+
+  void clear() {
+    state = const AsyncValue.data([]);
   }
 }
+
+// ══════════════════════════════════════════════════════════════
+// DETAIL PROVIDERS
+// ══════════════════════════════════════════════════════════════
+
+final campaignDetailProvider =
+    FutureProvider.family<Campaign, String>((ref, id) async {
+  final api = ref.watch(workerApiProvider);
+  final datePreset = ref.watch(datePresetProvider);
+  return api.getCampaign(id, datePreset: datePreset);
+});
+
+final leadDetailProvider =
+    FutureProvider.family<Lead, String>((ref, id) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getLead(id);
+});
+
+// ══════════════════════════════════════════════════════════════
+// CONNECTION STATUS
+// ══════════════════════════════════════════════════════════════
+
+final connectionStatusProvider =
+    FutureProvider<Map<String, dynamic>>((ref) async {
+  final auth = ref.watch(metaAuthProvider);
+
+  final apiKey = await auth.getApiKey();
+  final sessionToken = await auth.getSessionToken();
+  final accountId = await auth.getAccountId();
+  final pixelId = await auth.getPixelId();
+  final hasMetaAuth = await auth.hasValidConfig();
+
+  bool workerOnline = false;
+  final dio = Dio();
+
+  try {
+    final response = await dio.get(
+      EnvConfig.healthUrl,
+      options: Options(
+        validateStatus: (status) => status != null && status < 500,
+        receiveTimeout: const Duration(seconds: 5),
+        sendTimeout: const Duration(seconds: 5),
+      ),
+    );
+
+    final status = response.statusCode ?? 0;
+    workerOnline = status >= 200 && status < 300;
+  } catch (_) {
+    workerOnline = false;
+  } finally {
+    dio.close();
+  }
+
+  final hasApiKey = apiKey != null && apiKey.trim().isNotEmpty;
+  final hasSessionToken =
+      sessionToken != null && sessionToken.trim().isNotEmpty;
+
+  final workerReady = workerOnline && (hasApiKey || hasSessionToken);
+  final connected = workerReady || hasMetaAuth;
+
+  final mode = workerReady
+      ? 'worker'
+      : hasMetaAuth
+          ? 'direct_meta'
+          : 'none';
+
+  return {
+    'hasApiKey': hasApiKey,
+    'hasSessionToken': hasSessionToken,
+    'hasMetaAuth': hasMetaAuth,
+    'accountId': accountId,
+    'pixelId': pixelId,
+    'workerOnline': workerOnline,
+    'workerReady': workerReady,
+    'mode': mode,
+    'connected': connected,
+  };
+});

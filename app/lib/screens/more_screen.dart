@@ -1,4 +1,3 @@
-//lib/screens/more_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,11 +5,12 @@ import 'package:go_router/go_router.dart';
 import '../core/theme.dart';
 import '../models/app_settings.dart';
 import '../providers/app_providers.dart';
-import '../widgets/glass_card.dart';
 import '../widgets/buttons.dart';
+import '../widgets/glass_card.dart';
 
 class MoreScreen extends ConsumerStatefulWidget {
   const MoreScreen({super.key});
+
   @override
   ConsumerState<MoreScreen> createState() => _MoreScreenState();
 }
@@ -23,8 +23,9 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
   void initState() {
     super.initState();
     _bgC = AnimationController(
-        vsync: this, duration: const Duration(seconds: 8))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    )..repeat(reverse: true);
   }
 
   @override
@@ -36,19 +37,21 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
+    final connectionAsync = ref.watch(connectionStatusProvider);
 
     return Scaffold(
       backgroundColor: C.bgDeep,
       body: Stack(
         children: [
-          // ANIMATED BG
           AnimatedBuilder(
             animation: _bgC,
             builder: (_, __) => Container(
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   center: Alignment(
-                      -0.3 + _bgC.value * 0.4, -0.6 + _bgC.value * 0.3),
+                    -0.3 + _bgC.value * 0.4,
+                    -0.6 + _bgC.value * 0.3,
+                  ),
                   radius: 1.5,
                   colors: [
                     C.primary.withValues(alpha: 0.04),
@@ -59,35 +62,45 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               ),
             ),
           ),
-
           SafeArea(
             bottom: false,
             child: CustomScrollView(
               physics: const BouncingScrollPhysics(),
               slivers: [
-                // HEADER
-                SliverToBoxAdapter(
+                const SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text('Settings & More',
-                            style: TextStyle(
-                                color: C.textPrimary,
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700)),
+                      children: [
+                        Text(
+                          'Settings & More',
+                          style: TextStyle(
+                            color: C.textPrimary,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                         SizedBox(height: 2),
-                        Text('Manage your app preferences',
-                            style: TextStyle(
-                                color: C.textSecondary, fontSize: 12)),
+                        Text(
+                          'Manage your app preferences',
+                          style: TextStyle(
+                            color: C.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                 ),
-
                 SliverToBoxAdapter(child: _accountCard()),
-                SliverToBoxAdapter(child: _metaConnectionCard()),
+                SliverToBoxAdapter(
+                  child: connectionAsync.when(
+                    loading: () => _connectionLoadingCard(),
+                    error: (_, __) => _metaConnectionFallbackCard(),
+                    data: (status) => _metaConnectionCard(status),
+                  ),
+                ),
                 SliverToBoxAdapter(child: _quickLinks()),
                 SliverToBoxAdapter(child: _notificationSettings(settings)),
                 SliverToBoxAdapter(child: _autopilotSettings(settings)),
@@ -104,7 +117,6 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ═══ ACCOUNT CARD ═══
   Widget _accountCard() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -121,16 +133,20 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                      color: C.primary.withValues(alpha: 0.4),
-                      blurRadius: 12),
+                    color: C.primary.withValues(alpha: 0.4),
+                    blurRadius: 12,
+                  ),
                 ],
               ),
               child: const Center(
-                child: Text('K',
-                    style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800)),
+                child: Text(
+                  'K',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
             ),
             const SizedBox(width: 14),
@@ -138,15 +154,22 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Kaapav Fashion Jewellery',
-                      style: TextStyle(
-                          color: C.textPrimary,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600)),
+                  Text(
+                    'Kaapav Fashion Jewellery',
+                    style: TextStyle(
+                      color: C.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   SizedBox(height: 2),
-                  Text('kaapav@business.com',
-                      style:
-                          TextStyle(color: C.textSecondary, fontSize: 12)),
+                  Text(
+                    'kaapav@business.com',
+                    style: TextStyle(
+                      color: C.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
                   SizedBox(height: 4),
                   Row(
                     children: [
@@ -156,15 +179,74 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 ],
               ),
             ),
-            Icon(Icons.chevron_right_rounded, color: C.textMuted, size: 22),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: C.textMuted,
+              size: 22,
+            ),
           ],
         ),
       ),
     );
   }
 
-  // ═══ META CONNECTION ═══
-  Widget _metaConnectionCard() {
+  Widget _connectionLoadingCard() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: GlassCard(
+        child: const Padding(
+          padding: EdgeInsets.symmetric(vertical: 14),
+          child: Center(
+            child: CircularProgressIndicator(color: C.primary),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _metaConnectionFallbackCard() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionTitle('Connection Status', Icons.link_rounded),
+            const SizedBox(height: 12),
+            const Text(
+              'Unable to load connection status',
+              style: TextStyle(
+                color: C.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _metaConnectionCard(Map<String, dynamic> status) {
+    final connected = status['connected'] == true;
+    final mode = status['mode']?.toString() ?? 'none';
+
+    final workerOnline = status['workerOnline'] == true;
+    final workerReady = status['workerReady'] == true;
+    final hasApiKey = status['hasApiKey'] == true;
+    final hasSession = status['hasSessionToken'] == true;
+    final hasMetaAuth = status['hasMetaAuth'] == true;
+
+    final accountId = status['accountId']?.toString();
+    final pixelId = status['pixelId']?.toString();
+
+    final subtitle = connected
+        ? mode == 'worker'
+            ? 'Connected via Worker'
+            : 'Connected via Direct Meta'
+        : 'Not connected • Setup required';
+
+    final statusColor = connected ? C.success : C.warning;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: GlassCard(
@@ -180,22 +262,32 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                     color: C.facebook.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child:
-                      const Icon(Icons.link_rounded, color: C.facebook, size: 18),
+                  child: const Icon(
+                    Icons.link_rounded,
+                    color: C.facebook,
+                    size: 18,
+                  ),
                 ),
                 const SizedBox(width: 10),
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Meta Connection',
-                          style: TextStyle(
-                              color: C.textPrimary,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600)),
-                      Text('Connected • API v21.0',
-                          style: TextStyle(
-                              color: C.success, fontSize: 11)),
+                      const Text(
+                        'Backend & Meta Connection',
+                        style: TextStyle(
+                          color: C.textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: statusColor,
+                          fontSize: 11,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -203,35 +295,63 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                   width: 10,
                   height: 10,
                   decoration: BoxDecoration(
-                    color: C.success,
+                    color: statusColor,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                          color: C.success.withValues(alpha: 0.5),
-                          blurRadius: 6),
+                        color: statusColor.withValues(alpha: 0.5),
+                        blurRadius: 6,
+                      ),
                     ],
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 14),
-            _infoRow('Account ID', 'act_123456789'),
-            const SizedBox(height: 6),
-            _infoRow('Pixel ID', '9876543210'),
-            const SizedBox(height: 6),
-            _infoRow('Token Expires', '57 days'),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: C.glassWhite,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: C.glassBorder),
+              ),
+              child: Column(
+                children: [
+                  _infoRow('Worker Online', workerOnline ? 'Yes' : 'No'),
+                  const SizedBox(height: 6),
+                  _infoRow('Worker Ready', workerReady ? 'Ready' : 'Not Ready'),
+                  const SizedBox(height: 6),
+                  _infoRow('API Key', hasApiKey ? 'Configured' : 'Missing'),
+                  const SizedBox(height: 6),
+                  _infoRow('Session', hasSession ? 'Active' : 'Inactive'),
+                  const SizedBox(height: 6),
+                  _infoRow('Meta Config', hasMetaAuth ? 'Configured' : 'Missing'),
+                  const SizedBox(height: 6),
+                  _infoRow(
+                    'Account ID',
+                    accountId?.isNotEmpty == true ? accountId! : '—',
+                  ),
+                  const SizedBox(height: 6),
+                  _infoRow(
+                    'Pixel ID',
+                    pixelId?.isNotEmpty == true ? pixelId! : '—',
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
                   child: OutlineBtn(
-                    label: 'Refresh Token',
+                    label: 'Refresh Status',
                     icon: Icons.refresh_rounded,
                     color: C.primary,
                     onTap: () {
+                      ref.invalidate(connectionStatusProvider);
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text('🔄 Token refreshed'),
+                        const SnackBar(
+                          content: Text('🔄 Connection status refreshed'),
                           backgroundColor: C.success,
                         ),
                       );
@@ -241,10 +361,10 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 const SizedBox(width: 10),
                 Expanded(
                   child: OutlineBtn(
-                    label: 'Reconnect',
+                    label: connected ? 'Reconnect' : 'Connect',
                     icon: Icons.link_rounded,
                     color: C.blue,
-                    onTap: () {},
+                    onTap: () => context.go('/connect'),
                   ),
                 ),
               ],
@@ -259,18 +379,25 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label,
-            style: const TextStyle(color: C.textMuted, fontSize: 12)),
-        Text(value,
-            style: const TextStyle(
-                color: C.textPrimary,
-                fontSize: 12,
-                fontWeight: FontWeight.w500)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: C.textMuted,
+            fontSize: 12,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: C.textPrimary,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
       ],
     );
   }
 
-  // ═══ QUICK LINKS ═══
   Widget _quickLinks() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -297,7 +424,11 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
   }
 
   Widget _quickLink(
-      IconData icon, String label, Color color, VoidCallback onTap) {
+    IconData icon,
+    String label,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
@@ -315,11 +446,14 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 child: Icon(icon, color: color, size: 20),
               ),
               const SizedBox(height: 6),
-              Text(label,
-                  style: const TextStyle(
-                      color: C.textSecondary,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500)),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: C.textSecondary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ),
@@ -327,7 +461,6 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ═══ NOTIFICATION SETTINGS ═══
   Widget _notificationSettings(AppSettings settings) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -341,22 +474,25 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               'Push Notifications',
               'Get notified about campaign changes',
               settings.pushNotifications,
-              (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(pushNotifications: v)),
+              (v) => ref
+                  .read(settingsProvider.notifier)
+                  .update((s) => s.copyWith(pushNotifications: v)),
             ),
             _settingToggle(
               'Budget Alerts',
               'Alert when spend nears daily limit',
               settings.budgetAlerts,
-              (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(budgetAlerts: v)),
+              (v) => ref
+                  .read(settingsProvider.notifier)
+                  .update((s) => s.copyWith(budgetAlerts: v)),
             ),
             _settingToggle(
               'Daily Report',
               'Receive daily performance summary',
               settings.dailyReport,
-              (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(dailyReport: v)),
+              (v) => ref
+                  .read(settingsProvider.notifier)
+                  .update((s) => s.copyWith(dailyReport: v)),
             ),
           ],
         ),
@@ -364,7 +500,6 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ═══ AUTOPILOT SETTINGS ═══
   Widget _autopilotSettings(AppSettings settings) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -378,36 +513,43 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               'Auto Scale',
               'Automatically increase budget for winners',
               settings.autoScale,
-              (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(autoScale: v)),
+              (v) => ref
+                  .read(settingsProvider.notifier)
+                  .update((s) => s.copyWith(autoScale: v)),
             ),
             _settingToggle(
               'Auto Kill',
               'Automatically pause low performers',
               settings.autoKill,
-              (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(autoKill: v)),
+              (v) => ref
+                  .read(settingsProvider.notifier)
+                  .update((s) => s.copyWith(autoKill: v)),
             ),
             const SizedBox(height: 10),
-
-            // ROAS THRESHOLD SLIDER
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('ROAS Threshold',
-                    style: TextStyle(color: C.textPrimary, fontSize: 13)),
+                const Text(
+                  'ROAS Threshold',
+                  style: TextStyle(color: C.textPrimary, fontSize: 13),
+                ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: C.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text('${settings.roasThreshold.toStringAsFixed(1)}x',
-                      style: const TextStyle(
-                          color: C.primary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700)),
+                  child: Text(
+                    '${settings.roasThreshold.toStringAsFixed(1)}x',
+                    style: const TextStyle(
+                      color: C.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -422,25 +564,30 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                   .read(settingsProvider.notifier)
                   .update((s) => s.copyWith(roasThreshold: v)),
             ),
-
-            // CPA THRESHOLD SLIDER
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('CPA Threshold',
-                    style: TextStyle(color: C.textPrimary, fontSize: 13)),
+                const Text(
+                  'CPA Threshold',
+                  style: TextStyle(color: C.textPrimary, fontSize: 13),
+                ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: C.warning.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text('₹${settings.cpaThreshold.toInt()}',
-                      style: const TextStyle(
-                          color: C.warning,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700)),
+                  child: Text(
+                    '₹${settings.cpaThreshold.toInt()}',
+                    style: const TextStyle(
+                      color: C.warning,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -461,7 +608,6 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ═══ GENERAL SETTINGS ═══
   Widget _generalSettings(AppSettings settings) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -476,7 +622,10 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               settings.refreshInterval,
               ['5 min', '10 min', '15 min', '30 min', '1 hour'],
               (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(refreshInterval: v ?? s.refreshInterval)),
+                    (s) => s.copyWith(
+                      refreshInterval: v ?? s.refreshInterval,
+                    ),
+                  ),
             ),
             const SizedBox(height: 12),
             _settingDropdown(
@@ -484,7 +633,8 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               settings.currency,
               ['₹ INR', '\$ USD', '€ EUR', '£ GBP'],
               (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(currency: v ?? s.currency)),
+                    (s) => s.copyWith(currency: v ?? s.currency),
+                  ),
             ),
             const SizedBox(height: 12),
             _settingDropdown(
@@ -492,7 +642,8 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               settings.dateFormat,
               ['DD MMM YYYY', 'MMM DD, YYYY', 'YYYY-MM-DD'],
               (v) => ref.read(settingsProvider.notifier).update(
-                  (s) => s.copyWith(dateFormat: v ?? s.dateFormat)),
+                    (s) => s.copyWith(dateFormat: v ?? s.dateFormat),
+                  ),
             ),
           ],
         ),
@@ -509,11 +660,12 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label,
-            style: const TextStyle(color: C.textPrimary, fontSize: 13)),
+        Text(
+          label,
+          style: const TextStyle(color: C.textPrimary, fontSize: 13),
+        ),
         Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: C.glassWhite,
             borderRadius: BorderRadius.circular(8),
@@ -521,19 +673,31 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
-              value: options.contains(currentValue) ? currentValue : options.first,
+              value: options.contains(currentValue)
+                  ? currentValue
+                  : options.first,
               items: options
-                  .map((o) => DropdownMenuItem(
+                  .map(
+                    (o) => DropdownMenuItem(
                       value: o,
-                      child: Text(o,
-                          style: const TextStyle(
-                              color: C.textPrimary, fontSize: 12))))
+                      child: Text(
+                        o,
+                        style: const TextStyle(
+                          color: C.textPrimary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  )
                   .toList(),
               onChanged: onChanged,
               dropdownColor: C.bgCard,
               isDense: true,
-              icon: const Icon(Icons.expand_more_rounded,
-                  color: C.textMuted, size: 16),
+              icon: const Icon(
+                Icons.expand_more_rounded,
+                color: C.textMuted,
+                size: 16,
+              ),
             ),
           ),
         ),
@@ -541,7 +705,6 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ═══ EXPORT SECTION ═══
   Widget _exportSection() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -551,23 +714,36 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
           children: [
             _sectionTitle('Export & Sync', Icons.cloud_upload_rounded),
             const SizedBox(height: 14),
-            _menuItem(Icons.table_chart_rounded, 'Google Sheets Sync',
-                C.success, () {
-              Navigator.pushNamed(context, '/more/sheets');
-            }),
-            _menuItem(Icons.picture_as_pdf_rounded, 'Export PDF Report',
-                C.error, () => _showComingSoon('PDF Export')),
-            _menuItem(Icons.file_download_rounded, 'Export CSV Data',
-                C.blue, () => _showComingSoon('CSV Export')),
-            _menuItem(Icons.share_rounded, 'Share Dashboard', C.purple,
-                () => _showComingSoon('Share')),
+            _menuItem(
+              Icons.table_chart_rounded,
+              'Google Sheets Sync',
+              C.success,
+              () => context.push('/more/sheets'),
+            ),
+            _menuItem(
+              Icons.picture_as_pdf_rounded,
+              'Export PDF Report',
+              C.error,
+              () => _showComingSoon('PDF Export'),
+            ),
+            _menuItem(
+              Icons.file_download_rounded,
+              'Export CSV Data',
+              C.blue,
+              () => _showComingSoon('CSV Export'),
+            ),
+            _menuItem(
+              Icons.share_rounded,
+              'Share Dashboard',
+              C.purple,
+              () => _showComingSoon('Share'),
+            ),
           ],
         ),
       ),
     );
   }
 
-  // ═══ ABOUT SECTION ═══
   Widget _aboutSection() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -577,22 +753,42 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
           children: [
             _sectionTitle('About', Icons.info_rounded),
             const SizedBox(height: 14),
-            _menuItem(Icons.info_outline_rounded, 'Version 1.0.0',
-                C.textSecondary, () {}),
-            _menuItem(Icons.privacy_tip_rounded, 'Privacy Policy',
-                C.info, () {}),
-            _menuItem(Icons.description_rounded, 'Terms of Service',
-                C.warning, () {}),
-            _menuItem(Icons.help_outline_rounded, 'Help & Support',
-                C.primary, () {}),
-            _menuItem(Icons.star_rounded, 'Rate the App', C.gold, () {}),
+            _menuItem(
+              Icons.info_outline_rounded,
+              'Version 1.0.0',
+              C.textSecondary,
+              () {},
+            ),
+            _menuItem(
+              Icons.privacy_tip_rounded,
+              'Privacy Policy',
+              C.info,
+              () {},
+            ),
+            _menuItem(
+              Icons.description_rounded,
+              'Terms of Service',
+              C.warning,
+              () {},
+            ),
+            _menuItem(
+              Icons.help_outline_rounded,
+              'Help & Support',
+              C.primary,
+              () {},
+            ),
+            _menuItem(
+              Icons.star_rounded,
+              'Rate the App',
+              C.gold,
+              () {},
+            ),
           ],
         ),
       ),
     );
   }
 
-  // ═══ DANGER ZONE ═══
   Widget _dangerZone() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -604,11 +800,14 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               children: [
                 Icon(Icons.warning_rounded, color: C.error, size: 18),
                 const SizedBox(width: 8),
-                Text('Danger Zone',
-                    style: TextStyle(
-                        color: C.error,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600)),
+                Text(
+                  'Danger Zone',
+                  style: TextStyle(
+                    color: C.error,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -621,8 +820,8 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 'This will remove all cached data. Fresh data will be fetched on next load.',
                 () {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('✅ Cache cleared'),
+                    const SnackBar(
+                      content: Text('✅ Cache cleared'),
                       backgroundColor: C.success,
                     ),
                   );
@@ -637,9 +836,10 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 'Reset Settings',
                 'This will reset all settings to defaults. Your data will not be affected.',
                 () {
+                  ref.read(settingsProvider.notifier).reset();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('✅ Settings reset'),
+                    const SnackBar(
+                      content: Text('✅ Settings reset'),
                       backgroundColor: C.success,
                     ),
                   );
@@ -653,7 +853,14 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
               () => _showConfirm(
                 'Disconnect & Logout',
                 'This will remove all saved tokens and account data. You\'ll need to reconnect.',
-                () {
+                () async {
+                  final auth = ref.read(metaAuthProvider);
+                  await auth.logout();
+
+                  if (!mounted) return;
+
+                  ref.invalidate(connectionStatusProvider);
+
                   context.go('/connect');
                 },
               ),
@@ -664,17 +871,19 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ═══ HELPER WIDGETS ═══
   Widget _sectionTitle(String title, IconData icon) {
     return Row(
       children: [
         Icon(icon, color: C.primary, size: 18),
         const SizedBox(width: 8),
-        Text(title,
-            style: const TextStyle(
-                color: C.textPrimary,
-                fontSize: 14,
-                fontWeight: FontWeight.w600)),
+        Text(
+          title,
+          style: const TextStyle(
+            color: C.textPrimary,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ],
     );
   }
@@ -693,15 +902,22 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: const TextStyle(
-                        color: C.textPrimary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: C.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text(subtitle,
-                    style: const TextStyle(
-                        color: C.textMuted, fontSize: 11)),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: C.textMuted,
+                    fontSize: 11,
+                  ),
+                ),
               ],
             ),
           ),
@@ -718,7 +934,11 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
   }
 
   Widget _menuItem(
-      IconData icon, String title, Color color, VoidCallback onTap) {
+    IconData icon,
+    String title,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return InkWell(
       onTap: () {
         HapticFeedback.lightImpact();
@@ -740,14 +960,20 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(title,
-                  style: const TextStyle(
-                      color: C.textPrimary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500)),
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: C.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
-            Icon(Icons.chevron_right_rounded,
-                color: C.textMuted, size: 18),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: C.textMuted,
+              size: 18,
+            ),
           ],
         ),
       ),
@@ -768,25 +994,34 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: C.bgCard,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title:
-            Text(title, style: const TextStyle(color: C.textPrimary)),
-        content: Text(message,
-            style: const TextStyle(color: C.textSecondary)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Text(
+          title,
+          style: const TextStyle(color: C.textPrimary),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(color: C.textSecondary),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(color: C.textSecondary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: C.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               onConfirm();
             },
-            child: Text(title.contains('Logout') ? 'Logout' : 'Confirm',
-                style: TextStyle(color: C.error)),
+            child: Text(
+              title.contains('Logout') ? 'Logout' : 'Confirm',
+              style: const TextStyle(color: C.error),
+            ),
           ),
         ],
       ),
@@ -794,7 +1029,6 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
   }
 }
 
-// ═══ PLAN BADGE WIDGET ═══
 class _PlanBadge extends StatelessWidget {
   const _PlanBadge();
 
@@ -809,14 +1043,20 @@ class _PlanBadge extends StatelessWidget {
       child: const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.workspace_premium_rounded,
-              color: Colors.black, size: 12),
+          Icon(
+            Icons.workspace_premium_rounded,
+            color: Colors.black,
+            size: 12,
+          ),
           SizedBox(width: 4),
-          Text('Pro Plan • Active',
-              style: TextStyle(
-                  color: Colors.black,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700)),
+          Text(
+            'Pro Plan • Active',
+            style: TextStyle(
+              color: Colors.black,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );

@@ -1,4 +1,3 @@
-// lib/screens/connect_meta_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
@@ -12,70 +11,53 @@ import 'main_shell.dart';
 import '../services/fcm_service.dart';
 import '../services/local_storage.dart';
 
-/// 🔥 GOAT Connect Screen — Meta + Worker Dual Auth
-/// Supports both Direct Meta mode and Worker proxy mode
-/// Auto-detects Worker availability, validates credentials, shows real connection status
 class ConnectMetaScreen extends StatefulWidget {
   const ConnectMetaScreen({super.key});
-  
+
   @override
   State<ConnectMetaScreen> createState() => _ConnectMetaScreenState();
 }
 
-class _ConnectMetaScreenState extends State<ConnectMetaScreen> 
+class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     with SingleTickerProviderStateMixin {
-  
-  // ══════════════════════════════════════════════════════════════
-  // Controllers & State
-  // ══════════════════════════════════════════════════════════════
-  
   late final AnimationController _bgC;
   late final AnimationController _successC;
-  
-  // Connection Mode
-  ConnectionMode _mode = ConnectionMode.worker; // Default to Worker
-  
-  // Worker Mode Controllers
+
+  ConnectionMode _mode = ConnectionMode.worker;
+
   final _workerApiKeyCtrl = TextEditingController();
-  
-  // Direct Meta Mode Controllers
   final _metaTokenCtrl = TextEditingController();
   final _metaAccountCtrl = TextEditingController();
   final _metaPixelCtrl = TextEditingController();
-  
-  // State
+
   bool _loading = false;
   bool _connected = false;
   bool _workerOnline = false;
   bool _checkingWorker = true;
   String? _errorMessage;
   ConnectionResult? _connectionResult;
-  
+
   final _auth = MetaAuth();
   final _dio = Dio();
-  
-  // ══════════════════════════════════════════════════════════════
-  // Lifecycle
-  // ══════════════════════════════════════════════════════════════
-  
+
   @override
   void initState() {
     super.initState();
-    
+
     _bgC = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 8),
     )..repeat(reverse: true);
-    
+
     _successC = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    
+
     _checkExistingConnection();
     _checkWorkerStatus();
   }
-  
+
   @override
   void dispose() {
     _bgC.dispose();
@@ -87,15 +69,9 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     _dio.close();
     super.dispose();
   }
-  
-  // ══════════════════════════════════════════════════════════════
-  // Initialization Checks
-  // ══════════════════════════════════════════════════════════════
-  
-  /// Check if user already has valid credentials
+
   Future<void> _checkExistingConnection() async {
     try {
-      // Check Worker credentials first
       final hasWorkerKey = await _auth.hasApiKey();
       if (hasWorkerKey) {
         final valid = await _verifyWorkerConnection();
@@ -104,78 +80,141 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           return;
         }
       }
-      
-      // Check Meta credentials
+
       final hasMetaConfig = await _auth.hasValidConfig();
       if (hasMetaConfig && mounted) {
         final token = await _auth.getToken();
         final accountId = await _auth.getAccountId();
-        
+
         if (token != null && accountId != null) {
           setState(() {
             _mode = ConnectionMode.directMeta;
             _metaTokenCtrl.text = token;
             _metaAccountCtrl.text = accountId;
           });
-          
+
           final pixelId = await _auth.getPixelId();
-          if (pixelId != null) _metaPixelCtrl.text = pixelId;
+          if (pixelId != null) {
+            _metaPixelCtrl.text = pixelId;
+          }
         }
       }
     } catch (e) {
       debugPrint('Check existing connection error: $e');
     }
   }
-  
-  /// Check if Worker is online and reachable
+
+  Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      try {
+        return Map<String, dynamic>.from(value);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  String _extractErrorMessage(
+    dynamic value, {
+    String fallback = 'Something went wrong',
+  }) {
+    if (value == null) return fallback;
+
+    if (value is String) {
+      final text = value.trim();
+      return text.isNotEmpty ? text : fallback;
+    }
+
+    if (value is List && value.isNotEmpty) {
+      return _extractErrorMessage(value.first, fallback: fallback);
+    }
+
+    final map = _asMap(value);
+    if (map == null) return fallback;
+
+    final error = map['error'];
+
+    if (error is String && error.trim().isNotEmpty) {
+      return error;
+    }
+
+    final errorMap = _asMap(error);
+    final errorMsg = errorMap?['message']?.toString();
+    if (errorMsg != null && errorMsg.trim().isNotEmpty) {
+      return errorMsg;
+    }
+
+    final message = map['message']?.toString();
+    if (message != null && message.trim().isNotEmpty) {
+      return message;
+    }
+
+    return fallback;
+  }
+
+  int? _extractErrorCode(dynamic value) {
+    final map = _asMap(value);
+    if (map == null) return null;
+
+    final errorMap = _asMap(map['error']);
+    final rawCode = errorMap?['code'] ?? map['code'];
+
+    if (rawCode is int) return rawCode;
+    return int.tryParse(rawCode?.toString() ?? '');
+  }
+
   Future<void> _checkWorkerStatus() async {
-    setState(() => _checkingWorker = true);
-    
+    if (mounted) {
+      setState(() => _checkingWorker = true);
+    }
+
     try {
       final response = await _dio.get(
         EnvConfig.healthUrl,
         options: Options(
-          validateStatus: (status) => status! < 500,
+          validateStatus: (status) => status != null && status < 500,
           receiveTimeout: const Duration(seconds: 5),
           sendTimeout: const Duration(seconds: 5),
         ),
       );
-      
-      if (response.data['success'] == true) {
+
+      final status = response.statusCode ?? 0;
+      if (status >= 200 && status < 300) {
+        if (!mounted) return;
         setState(() {
           _workerOnline = true;
           _checkingWorker = false;
-          _mode = ConnectionMode.worker; // Default to Worker if available
+          _mode = ConnectionMode.worker;
         });
       } else {
         _setWorkerOffline();
       }
-    } catch (e) {
+    } catch (_) {
       _setWorkerOffline();
     }
   }
-  
+
   void _setWorkerOffline() {
+    if (!mounted) return;
+
     setState(() {
       _workerOnline = false;
       _checkingWorker = false;
-      _mode = ConnectionMode.directMeta; // Fall back to Direct Meta
+      _mode = ConnectionMode.directMeta;
     });
   }
-  
-  // ══════════════════════════════════════════════════════════════
-  // Connection Logic
-  // ══════════════════════════════════════════════════════════════
-  
+
   Future<void> _connect() async {
     HapticFeedback.mediumImpact();
-    
+
     setState(() {
       _loading = true;
       _errorMessage = null;
       _connectionResult = null;
     });
-    
+
     try {
       if (_mode == ConnectionMode.worker) {
         await _connectViaWorker();
@@ -183,6 +222,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
         await _connectDirectMeta();
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = e.toString().replaceFirst('Exception: ', '');
         _loading = false;
@@ -190,51 +230,54 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       HapticFeedback.heavyImpact();
     }
   }
-  
-  /// Worker-based authentication
+
   Future<void> _connectViaWorker() async {
     final apiKey = _workerApiKeyCtrl.text.trim();
-    
     if (apiKey.isEmpty) {
       throw Exception('Please enter API Secret Key');
     }
-    
+
     try {
-      // Step 1: Authenticate with Worker
       final authResponse = await _dio.post(
         EnvConfig.authLoginUrl,
         data: {'api_key': apiKey},
         options: Options(
-          validateStatus: (status) => status! < 500,
+          validateStatus: (status) => status != null && status < 500,
         ),
       );
-      
-      if (authResponse.data['success'] != true) {
-        throw Exception(authResponse.data['error'] ?? 'Invalid API Key');
+
+      final map = _asMap(authResponse.data);
+      if (map == null) {
+        throw Exception(
+          _extractErrorMessage(
+            authResponse.data,
+            fallback: 'Invalid response format from Worker',
+          ),
+        );
       }
-      
-      final sessionToken = authResponse.data['data']['token'];
-      
-      // Step 2: Test Worker endpoints
-      final campaignsResponse = await _dio.get(
-        EnvConfig.campaignsUrl,
-        queryParameters: {'limit': 1},
-        options: Options(
-          headers: {'X-API-Key': apiKey},
-          validateStatus: (status) => status! < 500,
-        ),
-      );
-      
-      if (campaignsResponse.data['success'] != true) {
-        throw Exception('Worker API test failed: ${campaignsResponse.data['error']}');
+
+      if (map['success'] != true) {
+        throw Exception(
+          _extractErrorMessage(
+            map,
+            fallback: 'Invalid API Key',
+          ),
+        );
       }
-      
-      // Step 3: Save credentials
+
+      final dataMap = _asMap(map['data']);
+      final sessionToken = dataMap?['token']?.toString();
+
+      if (sessionToken == null || sessionToken.isEmpty) {
+        throw Exception('Worker did not return a valid session token');
+      }
+
       await _auth.saveApiKey(apiKey);
       await _auth.saveSessionToken(sessionToken);
       await _auth.setOnboarded();
-      
-      // Step 4: Set success state
+
+      if (!mounted) return;
+
       setState(() {
         _connected = true;
         _loading = false;
@@ -242,91 +285,147 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           mode: ConnectionMode.worker,
           workerUrl: EnvConfig.workerBaseUrl,
           metaAccountId: null,
-          campaignCount: campaignsResponse.data['meta']?['total'],
+          campaignCount: null,
         );
       });
-      
+
       _successC.forward();
       HapticFeedback.heavyImpact();
-      
-      // Auto-navigate after 1.5s
+
       await Future.delayed(const Duration(milliseconds: 1500));
       if (mounted) _navigateToDashboard();
-      
     } on DioException catch (e) {
+      final responseMessage = _extractErrorMessage(
+        e.response?.data,
+        fallback: e.message ?? 'Network error',
+      );
+
       if (e.type == DioExceptionType.connectionTimeout ||
           e.type == DioExceptionType.receiveTimeout) {
-        throw Exception('Worker connection timeout. Please check your internet.');
+        throw Exception('Worker connection timeout');
       } else if (e.type == DioExceptionType.connectionError) {
-        throw Exception('Cannot reach Worker. Check URL or internet connection.');
+        throw Exception('Cannot reach Worker');
       } else {
-        throw Exception('Network error: ${e.message}');
+        throw Exception(responseMessage);
       }
     }
   }
-  
-  /// Direct Meta API authentication
+
   Future<void> _connectDirectMeta() async {
     final token = _metaTokenCtrl.text.trim();
-    final accountId = _metaAccountCtrl.text.trim();
+    final rawAccountId = _metaAccountCtrl.text.trim();
     final pixelId = _metaPixelCtrl.text.trim();
-    
+
     if (token.isEmpty) throw Exception('Please enter Access Token');
-    if (accountId.isEmpty) throw Exception('Please enter Ad Account ID');
-    
+    if (rawAccountId.isEmpty) throw Exception('Please enter Ad Account ID');
+
+    final accountId =
+        rawAccountId.startsWith('act_') ? rawAccountId : 'act_$rawAccountId';
+
     try {
-      // Step 1: Test Meta token validity
-      final metaUrl = 'https://graph.facebook.com/v21.0/me?access_token=$token';
       final meResponse = await _dio.get(
-        metaUrl,
-        options: Options(validateStatus: (status) => status! < 500),
+        'https://graph.facebook.com/v21.0/me',
+        queryParameters: {
+          'access_token': token,
+        },
+        options: Options(
+          validateStatus: (status) => status != null && status < 500,
+        ),
       );
-      
-      if (meResponse.data['error'] != null) {
-        throw Exception('Invalid Meta token: ${meResponse.data['error']['message']}');
+
+      final meMap = _asMap(meResponse.data);
+      if (meMap == null) {
+        throw Exception(
+          _extractErrorMessage(
+            meResponse.data,
+            fallback: 'Invalid response from Meta while validating token',
+          ),
+        );
       }
-      
-      // Step 2: Test account access
-      final accId = accountId.startsWith('act_') ? accountId : 'act_$accountId';
-      final accountUrl = 'https://graph.facebook.com/v21.0/$accId?access_token=$token&fields=name,account_status';
-      
+
+      if (meMap['error'] != null) {
+        final code = _extractErrorCode(meMap);
+        if (code == 190) {
+          throw Exception('Access token expired. Please generate a new one.');
+        }
+        throw Exception(
+          'Invalid Meta token: ${_extractErrorMessage(meMap, fallback: 'Token validation failed')}',
+        );
+      }
+
       final accountResponse = await _dio.get(
-        accountUrl,
-        options: Options(validateStatus: (status) => status! < 500),
+        'https://graph.facebook.com/v21.0/$accountId',
+        queryParameters: {
+          'access_token': token,
+          'fields': 'name,account_status',
+        },
+        options: Options(
+          validateStatus: (status) => status != null && status < 500,
+        ),
       );
-      
-      if (accountResponse.data['error'] != null) {
-        throw Exception('Cannot access Ad Account: ${accountResponse.data['error']['message']}');
+
+      final accountMap = _asMap(accountResponse.data);
+      if (accountMap == null) {
+        throw Exception(
+          _extractErrorMessage(
+            accountResponse.data,
+            fallback: 'Invalid response from Meta while validating Ad Account',
+          ),
+        );
       }
-      
-      final accountName = accountResponse.data['name'] ?? 'Unknown';
-      final accountStatus = accountResponse.data['account_status'];
-      
-      if (accountStatus != 1) {
+
+      if (accountMap['error'] != null) {
+        throw Exception(
+          'Cannot access Ad Account: ${_extractErrorMessage(accountMap, fallback: 'Ad Account validation failed')}',
+        );
+      }
+
+      final accountName = accountMap['name']?.toString() ?? 'Unknown';
+      final accountStatusRaw = accountMap['account_status'];
+      final statusVal = int.tryParse(accountStatusRaw?.toString() ?? '');
+
+      if (statusVal != null && statusVal != 1) {
         throw Exception('Ad Account is disabled or restricted');
       }
-      
-      // Step 3: Optionally test Pixel
+
       if (pixelId.isNotEmpty) {
-        final pixelUrl = 'https://graph.facebook.com/v21.0/$pixelId?access_token=$token&fields=name';
         final pixelResponse = await _dio.get(
-          pixelUrl,
-          options: Options(validateStatus: (status) => status! < 500),
+          'https://graph.facebook.com/v21.0/$pixelId',
+          queryParameters: {
+            'access_token': token,
+            'fields': 'name',
+          },
+          options: Options(
+            validateStatus: (status) => status != null && status < 500,
+          ),
         );
-        
-        if (pixelResponse.data['error'] != null) {
-          // Don't fail connection if pixel is invalid, just warn
-          debugPrint('Pixel validation warning: ${pixelResponse.data['error']['message']}');
+
+        final pixelMap = _asMap(pixelResponse.data);
+        if (pixelMap != null && pixelMap['error'] != null) {
+          debugPrint(
+            'Pixel validation warning: ${_extractErrorMessage(pixelMap, fallback: 'Invalid Pixel ID')}',
+          );
         }
       }
-      
-      // Step 4: Save credentials
+
       await _auth.saveToken(token);
       await _auth.saveAccountId(accountId);
-      if (pixelId.isNotEmpty) await _auth.savePixelId(pixelId);
+      if (pixelId.isNotEmpty) {
+        await _auth.savePixelId(pixelId);
+      }
       await _auth.setOnboarded();
-      
-      // Step 5: Set success state
+
+      try {
+        final fcmToken = LocalStorageService.getSetting<String>('fcm_token');
+        if (fcmToken != null) {
+          await FCMService().registerDevice(fcmToken);
+        }
+      } catch (e) {
+        debugPrint('⚠️ FCM registration skipped: $e');
+      }
+
+      if (!mounted) return;
+
       setState(() {
         _connected = true;
         _loading = false;
@@ -338,52 +437,60 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           metaPixelId: pixelId.isNotEmpty ? pixelId : null,
         );
       });
-      
+
       _successC.forward();
       HapticFeedback.heavyImpact();
-      
-      // Auto-navigate after 1.5s
+
       await Future.delayed(const Duration(milliseconds: 1500));
       if (mounted) _navigateToDashboard();
-      
     } on DioException catch (e) {
-      if (e.response?.statusCode == 190) {
+      final code = _extractErrorCode(e.response?.data);
+      final message = _extractErrorMessage(
+        e.response?.data,
+        fallback: e.message ?? 'Meta API error',
+      );
+
+      if (code == 190) {
         throw Exception('Access token expired. Please generate a new one.');
       } else if (e.response?.statusCode == 403) {
         throw Exception('Permission denied. Check token permissions.');
       } else {
-        throw Exception('Meta API error: ${e.message}');
+        throw Exception(message);
       }
     }
   }
-  
-  /// Verify existing Worker connection
+
   Future<bool> _verifyWorkerConnection() async {
     try {
       final apiKey = await _auth.getApiKey();
-      if (apiKey == null) return false;
-      
+      if (apiKey == null || apiKey.isEmpty) return false;
+
       final response = await _dio.post(
         EnvConfig.authLoginUrl,
         data: {'api_key': apiKey},
-        options: Options(validateStatus: (status) => status! < 500),
+        options: Options(
+          validateStatus: (status) => status != null && status < 500,
+        ),
       );
-      
-      if (response.data['success'] == true) {
-        final token = response.data['data']['token'];
-        await _auth.saveSessionToken(token);
-        return true;
+
+      final map = _asMap(response.data);
+      if (map == null || map['success'] != true) {
+        return false;
       }
-      return false;
-    } catch (e) {
+
+      final dataMap = _asMap(map['data']);
+      final sessionToken = dataMap?['token']?.toString();
+      if (sessionToken == null || sessionToken.isEmpty) {
+        return false;
+      }
+
+      await _auth.saveSessionToken(sessionToken);
+      return true;
+    } catch (_) {
       return false;
     }
   }
-  
-  // ══════════════════════════════════════════════════════════════
-  // Navigation
-  // ══════════════════════════════════════════════════════════════
-  
+
   void _navigateToDashboard() {
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
@@ -403,18 +510,13 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
-  // ══════════════════════════════════════════════════════════════
-  // UI Build
-  // ══════════════════════════════════════════════════════════════
-  
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: C.bgDeep,
       body: Stack(
         children: [
-          // Animated Background
           AnimatedBuilder(
             animation: _bgC,
             builder: (_, __) => Container(
@@ -436,8 +538,6 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
               ),
             ),
           ),
-          
-          // Content
           SafeArea(
             child: _checkingWorker
                 ? _buildCheckingWorker()
@@ -448,58 +548,36 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SizedBox(height: 20),
-                        
-                        // Header
                         _buildHeader(),
                         const SizedBox(height: 32),
-                        
-                        // Worker Status Banner
-                        if (!_workerOnline)
-                          _buildWorkerOfflineBanner(),
-                        
-                        // Connection Mode Toggle
-                        if (_workerOnline)
-                          _buildModeToggle(),
-                        
+                        if (!_workerOnline) _buildWorkerOfflineBanner(),
+                        if (_workerOnline) _buildModeToggle(),
                         const SizedBox(height: 24),
-                        
-                        // Error Message
-                        if (_errorMessage != null)
-                          _buildErrorBanner(),
-                        
-                        // Success Message
+                        if (_errorMessage != null) _buildErrorBanner(),
                         if (_connected && _connectionResult != null)
                           _buildSuccessBanner(),
-                        
-                        // Input Forms
                         if (!_connected) ...[
                           if (_mode == ConnectionMode.worker)
                             _buildWorkerForm()
                           else
                             _buildMetaForm(),
                         ],
-                        
                         const SizedBox(height: 24),
-                        
-                        // Connect Button
                         PrimaryBtn(
-                          label: _connected 
-                              ? 'Launch Dashboard 🚀' 
-                              : (_mode == ConnectionMode.worker 
-                                  ? 'Connect to Worker' 
+                          label: _connected
+                              ? 'Launch Dashboard 🚀'
+                              : (_mode == ConnectionMode.worker
+                                  ? 'Connect to Worker'
                                   : 'Connect & Verify'),
-                          icon: _connected 
-                              ? Icons.dashboard_rounded 
+                          icon: _connected
+                              ? Icons.dashboard_rounded
                               : Icons.link_rounded,
                           loading: _loading,
-                          onTap: _canConnect() 
-                              ? (_connected ? _navigateToDashboard : _connect) 
+                          onTap: _canConnect()
+                              ? (_connected ? _navigateToDashboard : _connect)
                               : null,
                         ),
-                        
                         const SizedBox(height: 16),
-                        
-                        // Skip Button
                         if (!_connected)
                           Center(
                             child: TextButton(
@@ -514,12 +592,8 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                               ),
                             ),
                           ),
-                        
                         const SizedBox(height: 32),
-                        
-                        // Help Section
-                        if (!_connected)
-                          _buildHelpSection(),
+                        if (!_connected) _buildHelpSection(),
                       ],
                     ),
                   ),
@@ -528,11 +602,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
-  // ══════════════════════════════════════════════════════════════
-  // UI Components
-  // ══════════════════════════════════════════════════════════════
-  
+
   Widget _buildCheckingWorker() {
     return Center(
       child: Column(
@@ -558,7 +628,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildHeader() {
     return Center(
       child: Column(
@@ -616,7 +686,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildWorkerOfflineBanner() {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -645,7 +715,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                 const SizedBox(height: 4),
                 Text(
                   'Using Direct Meta mode. Worker unavailable at:\n${EnvConfig.workerBaseUrl}',
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: C.textSecondary,
                     fontSize: 11,
                   ),
@@ -657,7 +727,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildModeToggle() {
     return GlassCard(
       padding: const EdgeInsets.all(4),
@@ -686,7 +756,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildModeButton({
     required ConnectionMode mode,
     required IconData icon,
@@ -715,9 +785,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected
-                ? (mode == ConnectionMode.worker
-                    ? C.primary
-                    : C.facebook)
+                ? (mode == ConnectionMode.worker ? C.primary : C.facebook)
                 : C.glassBorder,
             width: isSelected ? 2 : 1,
           ),
@@ -752,7 +820,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildErrorBanner() {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -782,7 +850,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                 const SizedBox(height: 4),
                 Text(
                   _errorMessage!,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: C.textSecondary,
                     fontSize: 12,
                   ),
@@ -794,7 +862,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildSuccessBanner() {
     return ScaleTransition(
       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
@@ -873,7 +941,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                   ] else ...[
                     _buildInfoRow(
                       'Account',
-                      _connectionResult!.metaAccountName ?? 
+                      _connectionResult!.metaAccountName ??
                           _connectionResult!.metaAccountId!,
                     ),
                     if (_connectionResult!.metaPixelId != null)
@@ -890,7 +958,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildInfoRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -921,7 +989,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildWorkerForm() {
     return Column(
       children: [
@@ -946,8 +1014,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
             children: [
               Row(
                 children: [
-                  Icon(Icons.info_outline_rounded, 
-                    color: C.primary, size: 16),
+                  Icon(Icons.info_outline_rounded, color: C.primary, size: 16),
                   const SizedBox(width: 8),
                   const Text(
                     'Worker Configuration',
@@ -961,15 +1028,14 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
               ),
               const SizedBox(height: 10),
               _buildConfigRow('URL', EnvConfig.workerBaseUrl),
-              _buildConfigRow('Status', 
-                _workerOnline ? 'Online ✓' : 'Checking...'),
+              _buildConfigRow('Status', _workerOnline ? 'Online ✓' : 'Checking...'),
             ],
           ),
         ),
       ],
     );
   }
-  
+
   Widget _buildMetaForm() {
     return Column(
       children: [
@@ -984,10 +1050,10 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
         const SizedBox(height: 14),
         GlassInput(
           label: 'Ad Account ID',
-          hint: 'e.g. 123456789',
+          hint: 'e.g. act_123456789 or 123456789',
           controller: _metaAccountCtrl,
           prefixIcon: Icons.account_box_rounded,
-          keyboardType: TextInputType.number,
+          keyboardType: TextInputType.text,
           onChanged: (_) => setState(() => _errorMessage = null),
         ),
         const SizedBox(height: 14),
@@ -1001,7 +1067,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ],
     );
   }
-  
+
   Widget _buildConfigRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -1031,7 +1097,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
+
   Widget _buildHelpSection() {
     return GlassCard(
       padding: const EdgeInsets.all(16),
@@ -1055,29 +1121,49 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
             ],
           ),
           const SizedBox(height: 14),
-          
           if (_mode == ConnectionMode.worker) ...[
-            _buildHelpStep('1', 'Contact your admin',
-                'Get the API_SECRET_KEY from system administrator'),
-            _buildHelpStep('2', 'Paste it above',
-                'Enter the key in the API Secret Key field'),
-            _buildHelpStep('3', 'Connect',
-                'Tap Connect to Worker button to authenticate'),
+            _buildHelpStep(
+              '1',
+              'Contact your admin',
+              'Get the API_SECRET_KEY from system administrator',
+            ),
+            _buildHelpStep(
+              '2',
+              'Paste it above',
+              'Enter the key in the API Secret Key field',
+            ),
+            _buildHelpStep(
+              '3',
+              'Connect',
+              'Tap Connect to Worker button to authenticate',
+            ),
           ] else ...[
-            _buildHelpStep('1', 'Meta Business Suite',
-                'Go to Meta Business Suite → Settings'),
-            _buildHelpStep('2', 'System User',
-                'Create System User with ads_management permission'),
-            _buildHelpStep('3', 'Ad Account',
-                'Copy Ad Account ID from Ad Account Settings'),
-            _buildHelpStep('4', 'Pixel (Optional)',
-                'Find Pixel ID in Events Manager'),
+            _buildHelpStep(
+              '1',
+              'Meta Business Suite',
+              'Go to Meta Business Suite → Settings',
+            ),
+            _buildHelpStep(
+              '2',
+              'System User',
+              'Create System User with ads_management permission',
+            ),
+            _buildHelpStep(
+              '3',
+              'Ad Account',
+              'Copy Ad Account ID from Ad Account Settings',
+            ),
+            _buildHelpStep(
+              '4',
+              'Pixel (Optional)',
+              'Find Pixel ID in Events Manager',
+            ),
           ],
         ],
       ),
     );
   }
-  
+
   Widget _buildHelpStep(String num, String title, String description) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -1130,26 +1216,18 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       ),
     );
   }
-  
-  // ══════════════════════════════════════════════════════════════
-  // Validation
-  // ══════════════════════════════════════════════════════════════
-  
+
   bool _canConnect() {
     if (_connected) return true;
-    
+
     if (_mode == ConnectionMode.worker) {
       return _workerApiKeyCtrl.text.trim().isNotEmpty;
     } else {
       return _metaTokenCtrl.text.trim().isNotEmpty &&
-             _metaAccountCtrl.text.trim().isNotEmpty;
+          _metaAccountCtrl.text.trim().isNotEmpty;
     }
   }
 }
-
-// ══════════════════════════════════════════════════════════════
-// Data Models
-// ══════════════════════════════════════════════════════════════
 
 enum ConnectionMode {
   worker,
@@ -1163,7 +1241,7 @@ class ConnectionResult {
   final String? metaAccountName;
   final String? metaPixelId;
   final int? campaignCount;
-  
+
   ConnectionResult({
     required this.mode,
     this.workerUrl,

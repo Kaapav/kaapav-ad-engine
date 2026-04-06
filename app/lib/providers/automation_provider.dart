@@ -103,7 +103,7 @@ class AutomationNotifier extends StateNotifier<AutomationState> {
       // Generate condition and action text
       final conditionText = '$metric $operator $threshold';
       final actionText = actionValue != null
-          ? '$actionType ${actionValue}%'
+          ? '$actionType $actionValue%'
           : actionType;
 
       await _api.createRule(

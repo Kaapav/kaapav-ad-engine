@@ -1,56 +1,191 @@
-// lib/services/worker_api.dart
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+
 import '../core/env_config.dart';
 import '../models/campaign.dart';
-import '../models/lead.dart';
 import '../models/insights.dart';
+import '../models/lead.dart';
 import '../models/rule.dart';
 import 'meta_auth.dart';
 
-/// 🔥 GOAT Worker API Service
-/// All Meta API calls go through Cloudflare Worker
-/// Zero Meta tokens in Flutter, all server-side
+/// 🔥 Production-ready Worker API Service
+/// All external business/API access should go through Cloudflare Worker.
+/// Meta tokens must never live in Flutter.
 class WorkerApiService {
   late final Dio _dio;
-  final _auth = MetaAuth();
+  final MetaAuth _auth;
 
-  WorkerApiService() {
-    _dio = Dio(BaseOptions(
-      baseUrl: EnvConfig.workerBaseUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-      validateStatus: (status) => status! < 500,
-    ));
+  WorkerApiService({MetaAuth? auth}) : _auth = auth ?? MetaAuth() {
+    _dio = Dio(
+      BaseOptions(
+        baseUrl: EnvConfig.workerBaseUrl,
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 30),
+        sendTimeout: const Duration(seconds: 20),
+        contentType: Headers.jsonContentType,
+        responseType: ResponseType.json,
+        headers: const {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        validateStatus: (status) => status != null && status < 500,
+      ),
+    );
 
     _dio.interceptors.add(_WorkerInterceptor(_auth));
+
+    if (kDebugMode) {
+      _dio.interceptors.add(
+        LogInterceptor(
+          requestBody: true,
+          responseBody: true,
+          requestHeader: false,
+          responseHeader: false,
+          error: true,
+          logPrint: (obj) => debugPrint(obj.toString()),
+        ),
+      );
+    }
+  }
+ 
+   // ══════════════════════════════════════════════════════════════
+  // Core response helpers
+  // ══════════════════════════════════════════════════════════════
+
+  Map<String, dynamic> _asMap(dynamic value, {String context = 'response'}) {
+    if (value is Map<String, dynamic>) return value;
+    throw Exception('Invalid $context format');
+  }
+
+  List<dynamic> _asList(dynamic value, {String context = 'response list'}) {
+    if (value is List) return value;
+    throw Exception('Invalid $context format');
+  }
+
+  dynamic _unwrapData(Response response, {String fallbackError = 'Request failed'}) {
+    final body = _asMap(response.data, context: 'API response');
+
+    final success = body['success'] == true;
+    if (!success) {
+      throw Exception(_extractApiError(body, fallbackError: fallbackError));
+    }
+
+    return body['data'];
+  }
+
+  List<dynamic> _unwrapList(Response response, {String fallbackError = 'Request failed'}) {
+    final data = _unwrapData(response, fallbackError: fallbackError);
+    return _asList(data, context: 'API data list');
+  }
+
+  String _extractApiError(
+    Map<String, dynamic> body, {
+    String fallbackError = 'Request failed',
+  }) {
+    final error = body['error'];
+
+    if (error is String && error.trim().isNotEmpty) {
+      return error.trim();
+    }
+
+    if (error is Map<String, dynamic>) {
+      final message = error['message'];
+      if (message is String && message.trim().isNotEmpty) {
+        return message.trim();
+      }
+    }
+
+    return fallbackError;
+  }
+
+Never _throwDioError(
+  DioException e, {
+  String fallbackMessage = 'Network request failed',
+}) {
+  debugPrint('DIO ERROR TYPE: ${e.type}');
+  debugPrint('DIO ERROR MESSAGE: ${e.message}');
+  debugPrint('DIO ERROR: ${e.error}');
+  debugPrint('DIO RESPONSE: ${e.response?.data}');
+  debugPrint('DIO STATUS: ${e.response?.statusCode}');
+    if (e.response?.data is Map<String, dynamic>) {
+      final body = e.response!.data as Map<String, dynamic>;
+      throw Exception(_extractApiError(body, fallbackError: fallbackMessage));
+    }
+
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+        throw Exception('Connection timeout. Please try again.');
+      case DioExceptionType.sendTimeout:
+        throw Exception('Request timeout while sending data.');
+      case DioExceptionType.receiveTimeout:
+        throw Exception('Server took too long to respond.');
+      case DioExceptionType.connectionError:
+        throw Exception('No internet connection or server unreachable.');
+      case DioExceptionType.badCertificate:
+        throw Exception('Secure connection failed.');
+      case DioExceptionType.cancel:
+  throw Exception(e.error?.toString() ?? 'Request was cancelled.');
+      case DioExceptionType.badResponse:
+        throw Exception(fallbackMessage);
+      case DioExceptionType.unknown:
+        if (e.error is SocketException) {
+          throw Exception('No internet connection.');
+        }
+        throw Exception(e.message ?? fallbackMessage);
+    }
   }
 
   // ══════════════════════════════════════════════════════════════
   // Authentication
   // ══════════════════════════════════════════════════════════════
 
-  /// Login with API key, get session token
+  /// Login with API key and persist session token.
   Future<String> login(String apiKey) async {
-    final response = await _dio.post(
-      '/auth/login',
-      data: {'api_key': apiKey},
-    );
+    try {
+      final response = await _dio.post(
+        '/auth/login',
+        data: {'api_key': apiKey},
+      );
 
-    if (response.data['success'] == true) {
-      return response.data['data']['token'];
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Login failed'),
+        context: 'login data',
+      );
+
+      final token = data['token']?.toString();
+      if (token == null || token.isEmpty) {
+        throw Exception('Login succeeded but no session token was returned.');
+      }
+
+      await _auth.saveApiKey(apiKey);
+      await _auth.saveSessionToken(token);
+
+      return token;
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Login failed');
     }
-    throw Exception(response.data['error'] ?? 'Login failed');
   }
 
+  Future<void> logout() async {
+    await _auth.deleteSessionToken();
+    await _auth.deleteApiKey();
+  }
+
+  Future<bool> isConfigured() async {
+  return _auth.hasApiKey();
+}
   // ══════════════════════════════════════════════════════════════
   // Campaigns
   // ══════════════════════════════════════════════════════════════
 
-  /// Get all campaigns
-  Future<List<Campaign>> getCampaigns({
-    String datePreset = 'last_30d',
-    int limit = 50,
-  }) async {
+Future<List<Campaign>> getCampaigns({
+  String datePreset = 'last_30d',
+  int limit = 50,
+}) async {
+  try {
+    debugPrint('CALLING getCampaigns');
     final response = await _dio.get(
       '/api/campaigns',
       queryParameters: {
@@ -58,82 +193,104 @@ class WorkerApiService {
         'limit': limit,
       },
     );
+    debugPrint('getCampaigns STATUS: ${response.statusCode}');
+    debugPrint('getCampaigns DATA: ${response.data}');
 
-    if (response.data['success'] == true) {
-      return (response.data['data'] as List)
-          .map((json) => Campaign.fromJson(json))
+
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch campaigns',
+      );
+
+      return list
+          .map((json) => Campaign.fromJson(_asMap(json, context: 'campaign')))
           .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch campaigns');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch campaigns');
   }
 
-  /// Get single campaign with details
-  Future<Campaign> getCampaign(String id, {String datePreset = 'last_30d'}) async {
-    final response = await _dio.get(
-      '/api/campaigns/$id',
-      queryParameters: {'date_preset': datePreset},
-    );
+  Future<Campaign> getCampaign(
+    String id, {
+    String datePreset = 'last_30d',
+  }) async {
+    try {
+      final response = await _dio.get(
+        '/api/campaigns/$id',
+        queryParameters: {'date_preset': datePreset},
+      );
 
-    if (response.data['success'] == true) {
-      return Campaign.fromJson(response.data['data']);
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Campaign not found'),
+        context: 'campaign',
+      );
+
+      return Campaign.fromJson(data);
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Campaign not found');
     }
-    throw Exception(response.data['error'] ?? 'Campaign not found');
   }
 
-  /// Get campaign insights
   Future<List<DayInsight>> getCampaignInsights(
     String id, {
     String datePreset = 'last_30d',
     String timeIncrement = '1',
   }) async {
-    final response = await _dio.get(
-      '/api/campaigns/$id/insights',
-      queryParameters: {
-        'date_preset': datePreset,
-        'time_increment': timeIncrement,
-      },
-    );
+    try {
+      final response = await _dio.get(
+        '/api/campaigns/$id/insights',
+        queryParameters: {
+          'date_preset': datePreset,
+          'time_increment': timeIncrement,
+        },
+      );
 
-    if (response.data['success'] == true) {
-      return (response.data['data'] as List)
-          .map((json) => DayInsight.fromJson(json))
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch campaign insights',
+      );
+
+      return list
+          .map((json) => DayInsight.fromJson(_asMap(json, context: 'day insight')))
           .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch campaign insights');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch insights');
   }
 
-  /// Update campaign status
   Future<void> updateCampaignStatus(String id, String status) async {
-    final response = await _dio.patch(
-      '/api/campaigns/$id',
-      data: {'status': status},
-    );
+    try {
+      final response = await _dio.patch(
+        '/api/campaigns/$id',
+        data: {'status': status},
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to update status');
+      _unwrapData(response, fallbackError: 'Failed to update campaign status');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to update campaign status');
     }
   }
 
-  /// Update campaign budget
   Future<void> updateCampaignBudget(
     String id, {
     double? dailyBudget,
     double? lifetimeBudget,
   }) async {
-    final response = await _dio.patch(
-      '/api/campaigns/$id',
-      data: {
-        if (dailyBudget != null) 'daily_budget': dailyBudget,
-        if (lifetimeBudget != null) 'lifetime_budget': lifetimeBudget,
-      },
-    );
+    try {
+      final response = await _dio.patch(
+        '/api/campaigns/$id',
+        data: {
+          if (dailyBudget != null) 'daily_budget': dailyBudget,
+          if (lifetimeBudget != null) 'lifetime_budget': lifetimeBudget,
+        },
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to update budget');
+      _unwrapData(response, fallbackError: 'Failed to update campaign budget');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to update campaign budget');
     }
   }
 
-  /// Create campaign
   Future<String> createCampaign({
     required String name,
     required String objective,
@@ -142,64 +299,84 @@ class WorkerApiService {
     double? lifetimeBudget,
     String? bidStrategy,
   }) async {
-    final response = await _dio.post(
-      '/api/campaigns',
-      data: {
-        'name': name,
-        'objective': objective,
-        'status': status,
-        if (dailyBudget != null) 'daily_budget': dailyBudget,
-        if (lifetimeBudget != null) 'lifetime_budget': lifetimeBudget,
-        if (bidStrategy != null) 'bid_strategy': bidStrategy,
-      },
-    );
+    try {
+      final response = await _dio.post(
+        '/api/campaigns',
+        data: {
+          'name': name,
+          'objective': objective,
+          'status': status,
+          if (dailyBudget != null) 'daily_budget': dailyBudget,
+          if (lifetimeBudget != null) 'lifetime_budget': lifetimeBudget,
+          if (bidStrategy != null) 'bid_strategy': bidStrategy,
+        },
+      );
 
-    if (response.data['success'] == true) {
-      return response.data['data']['id'];
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Failed to create campaign'),
+        context: 'campaign create response',
+      );
+
+      final id = data['id']?.toString();
+      if (id == null || id.isEmpty) {
+        throw Exception('Campaign created but no id was returned.');
+      }
+
+      return id;
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to create campaign');
     }
-    throw Exception(response.data['error'] ?? 'Failed to create campaign');
   }
 
   // ══════════════════════════════════════════════════════════════
   // Leads
   // ══════════════════════════════════════════════════════════════
 
-  /// Get all leads
   Future<List<Lead>> getLeads({
     String? stage,
     String? search,
     int limit = 50,
     int offset = 0,
   }) async {
-    final response = await _dio.get(
-      '/api/leads',
-      queryParameters: {
-        if (stage != null) 'stage': stage,
-        if (search != null) 'search': search,
-        'limit': limit,
-        'offset': offset,
-      },
-    );
+    try {
+      final response = await _dio.get(
+        '/api/leads',
+        queryParameters: {
+          if (stage != null && stage.isNotEmpty && stage != 'All') 'stage': stage,
+          if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+          'limit': limit,
+          'offset': offset,
+        },
+      );
 
-    if (response.data['success'] == true) {
-      return (response.data['data'] as List)
-          .map((json) => Lead.fromJson(json))
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch leads',
+      );
+
+      return list
+          .map((json) => Lead.fromJson(_asMap(json, context: 'lead')))
           .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch leads');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch leads');
   }
 
-  /// Get single lead with activities
   Future<Lead> getLead(String id) async {
-    final response = await _dio.get('/api/leads/$id');
+    try {
+      final response = await _dio.get('/api/leads/$id');
 
-    if (response.data['success'] == true) {
-      return Lead.fromJson(response.data['data']);
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Lead not found'),
+        context: 'lead',
+      );
+
+      return Lead.fromJson(data);
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Lead not found');
     }
-    throw Exception(response.data['error'] ?? 'Lead not found');
   }
 
-  /// Create lead
   Future<String> createLead({
     required String name,
     required String phone,
@@ -212,29 +389,39 @@ class WorkerApiService {
     double value = 0,
     String? notes,
   }) async {
-    final response = await _dio.post(
-      '/api/leads',
-      data: {
-        'name': name,
-        'phone': phone,
-        if (email != null) 'email': email,
-        if (campaign != null) 'campaign': campaign,
-        if (campaignId != null) 'campaign_id': campaignId,
-        'stage': stage,
-        'source': source,
-        if (product != null) 'product': product,
-        'value': value,
-        if (notes != null) 'notes': notes,
-      },
-    );
+    try {
+      final response = await _dio.post(
+        '/api/leads',
+        data: {
+          'name': name,
+          'phone': phone,
+          if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
+          if (campaign != null && campaign.trim().isNotEmpty) 'campaign': campaign.trim(),
+          if (campaignId != null && campaignId.trim().isNotEmpty) 'campaign_id': campaignId.trim(),
+          'stage': stage,
+          'source': source,
+          if (product != null && product.trim().isNotEmpty) 'product': product.trim(),
+          'value': value,
+          if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+        },
+      );
 
-    if (response.data['success'] == true) {
-      return response.data['data']['id'];
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Failed to create lead'),
+        context: 'lead create response',
+      );
+
+      final id = data['id']?.toString();
+      if (id == null || id.isEmpty) {
+        throw Exception('Lead created but no id was returned.');
+      }
+
+      return id;
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to create lead');
     }
-    throw Exception(response.data['error'] ?? 'Failed to create lead');
   }
 
-  /// Update lead
   Future<void> updateLead(
     String id, {
     String? stage,
@@ -244,29 +431,31 @@ class WorkerApiService {
     String? email,
     String? activityNote,
   }) async {
-    final response = await _dio.patch(
-      '/api/leads/$id',
-      data: {
-        if (stage != null) 'stage': stage,
-        if (notes != null) 'notes': notes,
-        if (value != null) 'value': value,
-        if (product != null) 'product': product,
-        if (email != null) 'email': email,
-        if (activityNote != null) 'activity_note': activityNote,
-      },
-    );
+    try {
+      final response = await _dio.patch(
+        '/api/leads/$id',
+        data: {
+          if (stage != null) 'stage': stage,
+          if (notes != null) 'notes': notes,
+          if (value != null) 'value': value,
+          if (product != null) 'product': product,
+          if (email != null) 'email': email,
+          if (activityNote != null) 'activity_note': activityNote,
+        },
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to update lead');
+      _unwrapData(response, fallbackError: 'Failed to update lead');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to update lead');
     }
   }
 
-  /// Delete lead
   Future<void> deleteLead(String id) async {
-    final response = await _dio.delete('/api/leads/$id');
-
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to delete lead');
+    try {
+      final response = await _dio.delete('/api/leads/$id');
+      _unwrapData(response, fallbackError: 'Failed to delete lead');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to delete lead');
     }
   }
 
@@ -274,65 +463,85 @@ class WorkerApiService {
   // Analytics
   // ══════════════════════════════════════════════════════════════
 
-  /// Get account summary
   Future<InsightsSummary> getAnalyticsSummary({
     String datePreset = 'last_30d',
   }) async {
-    final response = await _dio.get(
-      '/api/analytics/summary',
-      queryParameters: {'date_preset': datePreset},
-    );
+    try {
+      final response = await _dio.get(
+        '/api/analytics/summary',
+        queryParameters: {'date_preset': datePreset},
+      );
 
-    if (response.data['success'] == true) {
-      return InsightsSummary.fromJson(response.data['data']);
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Failed to fetch analytics summary'),
+        context: 'analytics summary',
+      );
+
+      return InsightsSummary.fromJson(data);
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch analytics summary');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch analytics');
   }
 
-  /// Get daily breakdown
   Future<List<DayInsight>> getAnalyticsDaily({
     String datePreset = 'last_30d',
   }) async {
-    final response = await _dio.get(
-      '/api/analytics/daily',
-      queryParameters: {'date_preset': datePreset},
-    );
+    try {
+      final response = await _dio.get(
+        '/api/analytics/daily',
+        queryParameters: {'date_preset': datePreset},
+      );
 
-    if (response.data['success'] == true) {
-      return (response.data['data'] as List)
-          .map((json) => DayInsight.fromJson(json))
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch analytics daily data',
+      );
+
+      return list
+          .map((json) => DayInsight.fromJson(_asMap(json, context: 'analytics day')))
           .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch analytics daily data');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch daily data');
   }
 
-  /// Get CRM stats
-  Future<Map<String, dynamic>> getCrmStats() async {
+Future<Map<String, dynamic>> getCrmStats() async {
+  try {
+    debugPrint('CALLING getCrmStats');
     final response = await _dio.get('/api/analytics/crm-stats');
+    debugPrint('getCrmStats STATUS: ${response.statusCode}');
+    debugPrint('getCrmStats DATA: ${response.data}');
 
-    if (response.data['success'] == true) {
-      return response.data['data'];
+      return _asMap(
+        _unwrapData(response, fallbackError: 'Failed to fetch CRM stats'),
+        context: 'crm stats',
+      );
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch CRM stats');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch CRM stats');
   }
 
   // ══════════════════════════════════════════════════════════════
   // Rules
   // ══════════════════════════════════════════════════════════════
 
-  /// Get all rules
   Future<List<AutoRule>> getRules() async {
-    final response = await _dio.get('/api/rules');
+    try {
+      final response = await _dio.get('/api/rules');
 
-    if (response.data['success'] == true) {
-      return (response.data['data'] as List)
-          .map((json) => AutoRule.fromJson(json))
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch automation rules',
+      );
+
+      return list
+          .map((json) => AutoRule.fromJson(_asMap(json, context: 'rule')))
           .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch automation rules');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch rules');
   }
 
-  /// Create rule
   Future<String> createRule({
     required String name,
     required String metric,
@@ -345,46 +554,58 @@ class WorkerApiService {
     bool enabled = true,
     int checkInterval = 360,
   }) async {
-    final response = await _dio.post(
-      '/api/rules',
-      data: {
-        'name': name,
-        'metric': metric,
-        'operator': operator,
-        'threshold': threshold,
-        'action_type': actionType,
-        if (actionValue != null) 'action_value': actionValue,
-        if (conditionText != null) 'condition_text': conditionText,
-        if (actionText != null) 'action_text': actionText,
-        'enabled': enabled,
-        'check_interval': checkInterval,
-      },
-    );
+    try {
+      final response = await _dio.post(
+        '/api/rules',
+        data: {
+          'name': name,
+          'metric': metric,
+          'operator': operator,
+          'threshold': threshold,
+          'action_type': actionType,
+          if (actionValue != null) 'action_value': actionValue,
+          if (conditionText != null) 'condition_text': conditionText,
+          if (actionText != null) 'action_text': actionText,
+          'enabled': enabled,
+          'check_interval': checkInterval,
+        },
+      );
 
-    if (response.data['success'] == true) {
-      return response.data['data']['id'];
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Failed to create automation rule'),
+        context: 'rule create response',
+      );
+
+      final id = data['id']?.toString();
+      if (id == null || id.isEmpty) {
+        throw Exception('Rule created but no id was returned.');
+      }
+
+      return id;
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to create automation rule');
     }
-    throw Exception(response.data['error'] ?? 'Failed to create rule');
   }
 
-  /// Toggle rule
   Future<void> toggleRule(String id, bool enabled) async {
-    final response = await _dio.patch(
-      '/api/rules/$id',
-      data: {'enabled': enabled},
-    );
+    try {
+      final response = await _dio.patch(
+        '/api/rules/$id',
+        data: {'enabled': enabled},
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to toggle rule');
+      _unwrapData(response, fallbackError: 'Failed to update automation rule');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to update automation rule');
     }
   }
 
-  /// Delete rule
   Future<void> deleteRule(String id) async {
-    final response = await _dio.delete('/api/rules/$id');
-
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to delete rule');
+    try {
+      final response = await _dio.delete('/api/rules/$id');
+      _unwrapData(response, fallbackError: 'Failed to delete automation rule');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to delete automation rule');
     }
   }
 
@@ -392,114 +613,136 @@ class WorkerApiService {
   // Notifications
   // ══════════════════════════════════════════════════════════════
 
-  /// Get notifications
   Future<List<Map<String, dynamic>>> getNotifications({int limit = 50}) async {
-    final response = await _dio.get(
-      '/api/notifications',
-      queryParameters: {'limit': limit},
-    );
+    try {
+      final response = await _dio.get(
+        '/api/notifications',
+        queryParameters: {'limit': limit},
+      );
 
-    if (response.data['success'] == true) {
-      return List<Map<String, dynamic>>.from(response.data['data']);
-    }
-    throw Exception(response.data['error'] ?? 'Failed to fetch notifications');
-  }
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch notifications',
+      );
 
-  /// Register device for FCM
-  Future<void> registerDevice(String fcmToken, {String? deviceName}) async {
-    final response = await _dio.post(
-      '/api/notifications/register-device',
-      data: {
-        'token': fcmToken,
-        if (deviceName != null) 'device_name': deviceName,
-        'platform': 'android',
-      },
-    );
-
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to register device');
+      return list
+          .map((item) => _asMap(item, context: 'notification'))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch notifications');
     }
   }
 
-  /// Mark all as read
+  Future<void> registerDevice(
+    String fcmToken, {
+    String? deviceName,
+    String platform = 'android',
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/api/notifications/register-device',
+        data: {
+          'token': fcmToken,
+          if (deviceName != null && deviceName.trim().isNotEmpty)
+            'device_name': deviceName.trim(),
+          'platform': platform,
+        },
+      );
+
+      _unwrapData(response, fallbackError: 'Failed to register device');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to register device');
+    }
+  }
+
   Future<void> markNotificationsRead() async {
-    final response = await _dio.post('/api/notifications/mark-read');
-
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to mark as read');
+    try {
+      final response = await _dio.post('/api/notifications/mark-read');
+      _unwrapData(response, fallbackError: 'Failed to mark notifications as read');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to mark notifications as read');
     }
   }
 
   // ══════════════════════════════════════════════════════════════
-  // Bridge (WhatsApp)
+  // Bridge / WhatsApp
   // ══════════════════════════════════════════════════════════════
 
-  /// Send follow-up via WhatsApp bot
   Future<void> sendFollowUp({
     required String phone,
     String? leadId,
     String? name,
     String? product,
   }) async {
-    final response = await _dio.post(
-      '/api/bridge/followup',
-      data: {
-        'phone': phone,
-        if (leadId != null) 'lead_id': leadId,
-        if (name != null) 'name': name,
-        if (product != null) 'product': product,
-      },
-    );
+    try {
+      final response = await _dio.post(
+        '/api/bridge/followup',
+        data: {
+          'phone': phone,
+          if (leadId != null && leadId.trim().isNotEmpty) 'lead_id': leadId.trim(),
+          if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+          if (product != null && product.trim().isNotEmpty) 'product': product.trim(),
+        },
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to send follow-up');
+      _unwrapData(response, fallbackError: 'Failed to send WhatsApp follow-up');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to send WhatsApp follow-up');
     }
   }
 
-  /// Get bridge stats
   Future<Map<String, dynamic>> getBridgeStats() async {
-    final response = await _dio.get('/api/bridge/stats');
+    try {
+      final response = await _dio.get('/api/bridge/stats');
 
-    if (response.data['success'] == true) {
-      return response.data['data'];
+      return _asMap(
+        _unwrapData(response, fallbackError: 'Failed to fetch bridge stats'),
+        context: 'bridge stats',
+      );
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch bridge stats');
     }
-    throw Exception(response.data['error'] ?? 'Failed to fetch stats');
   }
 
   // ══════════════════════════════════════════════════════════════
   // Sheets
   // ══════════════════════════════════════════════════════════════
 
-  /// Sync campaigns to Google Sheets
-  Future<void> syncCampaignsToSheets(String sheetId, {String datePreset = 'last_30d'}) async {
-    final response = await _dio.post(
-      '/api/sheets/sync-campaigns',
-      data: {
-        'sheetId': sheetId,
-        'date_preset': datePreset,
-      },
-    );
+  Future<void> syncCampaignsToSheets(
+    String sheetId, {
+    String datePreset = 'last_30d',
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/api/sheets/sync-campaigns',
+        data: {
+          'sheetId': sheetId,
+          'date_preset': datePreset,
+        },
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to sync campaigns');
+      _unwrapData(response, fallbackError: 'Failed to sync campaigns to Sheets');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to sync campaigns to Sheets');
     }
   }
 
-  /// Sync leads to Google Sheets
   Future<void> syncLeadsToSheets(String sheetId) async {
-    final response = await _dio.post(
-      '/api/sheets/sync-leads',
-      data: {'sheetId': sheetId},
-    );
+    try {
+      final response = await _dio.post(
+        '/api/sheets/sync-leads',
+        data: {'sheetId': sheetId},
+      );
 
-    if (response.data['success'] != true) {
-      throw Exception(response.data['error'] ?? 'Failed to sync leads');
+      _unwrapData(response, fallbackError: 'Failed to sync leads to Sheets');
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to sync leads to Sheets');
     }
   }
 }
 
 // ══════════════════════════════════════════════════════════════
-// Dio Interceptor for Worker Auth
+// Dio interceptor for Worker auth
 // ══════════════════════════════════════════════════════════════
 
 class _WorkerInterceptor extends Interceptor {
@@ -512,41 +755,30 @@ class _WorkerInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    // Skip auth for login endpoint
     if (options.path.contains('/auth/login')) {
-      return handler.next(options);
+      handler.next(options);
+      return;
     }
 
-    // Try API key first
     final apiKey = await _auth.getApiKey();
-    if (apiKey != null) {
-      options.headers['X-API-Key'] = apiKey;
-      return handler.next(options);
-    }
-
-    // Fall back to session token
     final sessionToken = await _auth.getSessionToken();
-    if (sessionToken != null) {
-      options.headers['Authorization'] = 'Bearer $sessionToken';
-      return handler.next(options);
+
+    debugPrint('REQUEST PATH: ${options.path}');
+    debugPrint('API KEY: $apiKey');
+    debugPrint('SESSION TOKEN: $sessionToken');
+
+    if (apiKey != null && apiKey.trim().isNotEmpty) {
+      options.headers['X-API-Key'] = apiKey.trim();
+    } else if (sessionToken != null && sessionToken.trim().isNotEmpty) {
+      options.headers['Authorization'] = 'Bearer ${sessionToken.trim()}';
     }
 
-    // No auth available
-    handler.reject(
-      DioException(
-        requestOptions: options,
-        error: 'No authentication credentials available',
-        type: DioExceptionType.cancel,
-      ),
-    );
+    handler.next(options);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    // Handle 401 Unauthorized
     if (err.response?.statusCode == 401) {
-      // Clear invalid credentials
-      _auth.deleteApiKey();
       _auth.deleteSessionToken();
     }
 

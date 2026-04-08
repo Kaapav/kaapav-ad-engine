@@ -1,4 +1,7 @@
-// ─── Cloudflare Bindings ───
+// ─────────────────────────────────────────────
+// Cloudflare Bindings
+// ─────────────────────────────────────────────
+
 export type Bindings = {
   DB: D1Database;
   CACHE: KVNamespace;
@@ -24,7 +27,10 @@ export type AppEnv = {
   };
 };
 
-// ─── D1 Models ───
+// ─────────────────────────────────────────────
+// D1 Models
+// ─────────────────────────────────────────────
+
 export interface Lead {
   id: string;
   name: string;
@@ -95,7 +101,55 @@ export interface DeviceToken {
   created_at: string;
 }
 
-// ─── Meta API Types ───
+export interface WhatsAppBridgeEntry {
+  id: string;
+  lead_id: string | null;
+  phone: string;
+  direction: string;
+  message_type: string | null;
+  template_name: string | null;
+  status: string;
+  wa_message_id: string | null;
+  created_at: string;
+}
+
+export interface CampaignCacheRow {
+  campaign_id: string;
+  data: string;
+  fetched_at: string;
+}
+
+// ─────────────────────────────────────────────
+// Rule / Automation helper types
+// ─────────────────────────────────────────────
+
+export type RuleMetric =
+  | 'roas'
+  | 'cpa'
+  | 'ctr'
+  | 'cpc'
+  | 'cpm'
+  | 'frequency'
+  | 'spend'
+  | 'budget_util'
+  | 'impressions'
+  | 'clicks'
+  | 'conversions'
+  | 'leads';
+
+export type RuleOperator = '<' | '>' | '<=' | '>=' | '==' | '!=';
+
+export type RuleActionType =
+  | 'pause'
+  | 'scale_budget'
+  | 'reduce_budget'
+  | 'alert'
+  | 'alert_and_pause';
+
+// ─────────────────────────────────────────────
+// Meta API Types
+// ─────────────────────────────────────────────
+
 export interface MetaCampaign {
   id: string;
   name: string;
@@ -117,6 +171,34 @@ export interface MetaAdSet {
   daily_budget?: string;
   targeting?: Record<string, unknown>;
   insights?: { data: MetaInsight[] };
+}
+
+export interface MetaAd {
+  id: string;
+  name: string;
+  status?: string;
+  effective_status?: string;
+  adset_id?: string;
+  campaign_id?: string;
+  creative?: MetaCreativeRef;
+  insights?: { data: MetaInsight[] };
+}
+
+export interface MetaCreativeRef {
+  id: string;
+  name?: string;
+  title?: string;
+  body?: string;
+  object_story_spec?: Record<string, unknown>;
+}
+
+export interface MetaCreative {
+  id: string;
+  name?: string;
+  title?: string;
+  body?: string;
+  object_story_spec?: Record<string, unknown>;
+  asset_feed_spec?: Record<string, unknown>;
 }
 
 export interface MetaInsight {
@@ -161,7 +243,10 @@ export interface CampaignParsed extends ParsedInsights {
   lifetime_budget: number;
 }
 
-// ─── Webhook Types ───
+// ─────────────────────────────────────────────
+// Webhook Types
+// ─────────────────────────────────────────────
+
 export interface WebhookPayload {
   object: string;
   entry: Array<{
@@ -183,7 +268,215 @@ export interface BridgeMessage {
   lead_data?: Partial<Lead>;
 }
 
-// ─── API Response ───
+// ─────────────────────────────────────────────
+// Intelligence Types
+// ─────────────────────────────────────────────
+
+export type ScoreStatus = 'hot' | 'scalable' | 'watch' | 'kill';
+
+export type BuyerTier = 'platinum' | 'gold' | 'silver' | 'risk';
+
+export type CreativeScoreStatus =
+  | 'winner'
+  | 'test'
+  | 'fatiguing'
+  | 'loser';
+
+export type RecommendationPriority =
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'critical';
+
+export type DecisionAction =
+  | 'scale_budget'
+  | 'hold'
+  | 'reduce_budget'
+  | 'pause'
+  | 'rotate_creative'
+  | 'retarget'
+  | 'duplicate';
+
+export interface AudienceScoreRow {
+  id: string;
+  entity_date: string;
+  campaign_id: string | null;
+  adset_id: string | null;
+  audience_key: string;
+  audience_name: string | null;
+  spend: number;
+  revenue: number;
+  roas: number;
+  cpa: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  frequency: number;
+  clicks: number;
+  conversions: number;
+  leads: number;
+  intent_score: number;
+  status: ScoreStatus;
+  reasons: string | null;
+  created_at: string;
+}
+
+export interface CreativeScoreRow {
+  id: string;
+  entity_date: string;
+  ad_id: string | null;
+  creative_id: string | null;
+  campaign_id: string | null;
+  adset_id: string | null;
+  audience_key: string | null;
+  creative_name: string | null;
+  creative_type: string | null;
+  hook_type: string | null;
+  angle: string | null;
+  product_tag: string | null;
+  spend: number;
+  revenue: number;
+  roas: number;
+  ctr: number;
+  conversions: number;
+  match_score: number;
+  fatigue_score: number;
+  status: string;
+  reasons: string | null;
+  created_at: string;
+}
+
+export interface BuyerScoreRow {
+  id: string;
+  lead_id: string | null;
+  phone: string;
+  customer_name: string | null;
+  total_orders: number;
+  total_revenue: number;
+  avg_order_value: number;
+  repeat_orders: number;
+  prepaid_ratio: number;
+  refund_count: number;
+  response_score: number;
+  buyer_quality_score: number;
+  buyer_tier: BuyerTier;
+  lookalike_seed_eligible: number;
+  product_affinity: string | null;
+  updated_at: string;
+}
+
+export interface OptimizationRecommendation {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  priority: RecommendationPriority;
+  action_type: DecisionAction;
+  title: string;
+  description: string;
+  score: number | null;
+  status: string;
+  payload: string | null;
+  created_at: string;
+}
+
+export interface PerformanceSnapshot {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  snapshot_date: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  cpa: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  frequency: number;
+  conversions: number;
+  extra: string | null;
+  created_at: string;
+}
+
+export interface IntelligenceSummary {
+  avgAudienceScore: number;
+  avgCreativeMatchScore: number;
+  topBuyerCount: number;
+  fatigueAlerts: number;
+  openRecommendations: number;
+  topScalableCampaigns: Array<{
+    id: string;
+    title: string;
+    score: number;
+  }>;
+  topHotAudiences: Array<{
+    key: string;
+    name: string;
+    score: number;
+  }>;
+  topSeedBuyers: Array<{
+    phone: string;
+    name: string;
+    score: number;
+  }>;
+}
+
+// ─────────────────────────────────────────────
+// Parsed / Engine helper models
+// ─────────────────────────────────────────────
+
+export interface AudienceScoreReasoned extends AudienceScoreRow {
+  reason_list?: string[];
+}
+
+export interface CreativeScoreReasoned extends CreativeScoreRow {
+  reason_list?: string[];
+}
+
+export interface BuyerScoreReasoned extends BuyerScoreRow {
+  product_affinity_list?: string[];
+}
+
+export interface RecommendationPayload {
+  campaignId?: string;
+  adsetId?: string;
+  adId?: string;
+  creativeId?: string;
+  audienceKey?: string;
+  budgetDeltaPercent?: number;
+  suggestedAction?: string;
+  reason?: string;
+  source?: string;
+  [key: string]: unknown;
+}
+
+// ─────────────────────────────────────────────
+// Generic Meta response helpers
+// ─────────────────────────────────────────────
+
+export interface MetaPaging {
+  previous?: string;
+  next?: string;
+}
+
+export interface MetaListResponse<T> {
+  data: T[];
+  paging?: MetaPaging;
+}
+
+export interface MetaErrorPayload {
+  error?: {
+    message?: string;
+    type?: string;
+    code?: number;
+    error_subcode?: number;
+    fbtrace_id?: string;
+  };
+}
+
+// ─────────────────────────────────────────────
+// API Response
+// ─────────────────────────────────────────────
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;

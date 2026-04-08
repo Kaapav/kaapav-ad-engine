@@ -1,24 +1,27 @@
-import '../screens/auth_screen.dart';
-import '../screens/sheets_screen.dart';
-import '../screens/audience_screen.dart';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import '../screens/splash_screen.dart';
-import '../screens/onboarding_screen.dart';
-import '../screens/connect_meta_screen.dart';
-import '../screens/dashboard_screen.dart';
-import '../screens/campaigns_screen.dart';
-import '../screens/campaign_detail_screen.dart';
-import '../screens/create_campaign_screen.dart';
-import '../screens/crm_screen.dart';
-import '../screens/lead_detail_screen.dart';
-import '../screens/autopilot_screen.dart';
-import '../screens/more_screen.dart';
-import '../screens/analytics_screen.dart';
-import '../screens/notifications_screen.dart';
+
 import '../models/campaign.dart';
 import '../models/lead.dart';
+
+import '../screens/analytics_screen.dart';
+import '../screens/audience_screen.dart';
+import '../screens/auth_screen.dart';
+import '../screens/autopilot_screen.dart';
+import '../screens/campaign_detail_screen.dart';
+import '../screens/campaigns_screen.dart';
+import '../screens/connect_meta_screen.dart';
+import '../screens/crm_screen.dart';
+import '../screens/create_campaign_screen.dart';
+import '../screens/dashboard_screen.dart';
+import '../screens/lead_detail_screen.dart';
+import '../screens/more_screen.dart';
+import '../screens/notifications_screen.dart';
+import '../screens/onboarding_screen.dart';
+import '../screens/sheets_screen.dart';
+import '../screens/splash_screen.dart';
 
 class AppRouter {
   static final _rootKey = GlobalKey<NavigatorState>();
@@ -27,7 +30,7 @@ class AppRouter {
     navigatorKey: _rootKey,
     initialLocation: '/splash',
     routes: [
-      // ═══ STANDALONE ROUTES ═══
+      // Standalone routes
       GoRoute(
         path: '/splash',
         builder: (_, __) => const SplashScreen(),
@@ -40,80 +43,94 @@ class AppRouter {
         path: '/connect',
         builder: (_, __) => const ConnectMetaScreen(),
       ),
-GoRoute(
-  path: '/auth',
-  builder: (context, state) => const AuthScreen(),
-),
-GoRoute(
-  path: '/more/sheets',
-  builder: (context, state) => const SheetsScreen(),
-),
-GoRoute(
-  path: '/more/audiences',
-  builder: (context, state) => const AudienceScreen(),
-),
+      GoRoute(
+        path: '/auth',
+        builder: (_, __) => const AuthScreen(),
+      ),
 
-      // ═══ MAIN SHELL (5 tabs) ═══
+      // Main Shell (5 tabs)
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
           return MainShellGo(shell: navigationShell);
         },
         branches: [
           // Tab 0: Dashboard
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/dashboard',
-              builder: (_, __) => const DashboardScreen(),
-            ),
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/dashboard',
+                builder: (_, __) => const DashboardScreen(),
+              ),
+            ],
+          ),
+
           // Tab 1: Campaigns
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/campaigns',
-              builder: (_, __) => const CampaignsScreen(),
-              routes: [
-                GoRoute(
-                  path: 'create',
-                  builder: (_, __) => const CreateCampaignScreen(),
-                ),
-              ],
-            ),
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/campaigns',
+                builder: (_, __) => const CampaignsScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'create',
+                    builder: (_, __) => const CreateCampaignScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
           // Tab 2: CRM
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/crm',
-              builder: (_, __) => const CrmScreen(),
-            ),
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/crm',
+                builder: (_, __) => const CrmScreen(),
+              ),
+            ],
+          ),
+
           // Tab 3: AutoPilot
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/autopilot',
-              builder: (_, __) => const AutoPilotScreen(),
-            ),
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/autopilot',
+                builder: (_, __) => const AutoPilotScreen(),
+              ),
+            ],
+          ),
+
           // Tab 4: More
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/more',
-              builder: (_, __) => const MoreScreen(),
-              routes: [
-                GoRoute(
-                  path: 'analytics',
-                  builder: (_, __) => const AnalyticsScreen(),
-                ),
-                GoRoute(
-                  path: 'notifications',
-                  builder: (_, __) => const NotificationsScreen(),
-                ),
-              ],
-            ),
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/more',
+                builder: (_, __) => const MoreScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'analytics',
+                    builder: (_, __) => const AnalyticsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'notifications',
+                    builder: (_, __) => const NotificationsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'sheets',
+                    builder: (_, __) => const SheetsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'audiences',
+                    builder: (_, __) => const AudienceScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ],
       ),
 
-      // ═══ DETAIL ROUTES (full screen) ═══
+      // Detail routes (full screen)
       GoRoute(
         path: '/campaign-detail',
         builder: (_, state) {
@@ -132,7 +149,7 @@ GoRoute(
   );
 }
 
-// ═══ SHELL WRAPPER FOR GO_ROUTER ═══
+// Shell wrapper
 class MainShellGo extends StatelessWidget {
   final StatefulNavigationShell shell;
   const MainShellGo({super.key, required this.shell});
@@ -145,7 +162,10 @@ class MainShellGo extends StatelessWidget {
       body: shell,
       bottomNavigationBar: _GlassNavGo(
         currentIndex: shell.currentIndex,
-        onTap: (i) => shell.goBranch(i, initialLocation: i == shell.currentIndex),
+        onTap: (i) => shell.goBranch(
+          i,
+          initialLocation: i == shell.currentIndex,
+        ),
       ),
     );
   }
@@ -184,7 +204,9 @@ class _GlassNavGo extends StatelessWidget {
                 ],
               ),
               borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: const Color(0xFF00E5CC).withValues(alpha: 0.3)),
+              border: Border.all(
+                color: const Color(0xFF00E5CC).withValues(alpha: 0.3),
+              ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -196,9 +218,25 @@ class _GlassNavGo extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(_items[i].$1, color: active ? const Color(0xFF00E5CC) : const Color(0xFF4A6A85), size: active ? 24 : 22),
+                      Icon(
+                        _items[i].$1,
+                        color: active
+                            ? const Color(0xFF00E5CC)
+                            : const Color(0xFF4A6A85),
+                        size: active ? 24 : 22,
+                      ),
                       const SizedBox(height: 2),
-                      Text(_items[i].$2, style: TextStyle(fontSize: active ? 10 : 9, fontWeight: active ? FontWeight.w700 : FontWeight.w400, color: active ? const Color(0xFF00E5CC) : const Color(0xFF4A6A85))),
+                      Text(
+                        _items[i].$2,
+                        style: TextStyle(
+                          fontSize: active ? 10 : 9,
+                          fontWeight:
+                              active ? FontWeight.w700 : FontWeight.w400,
+                          color: active
+                              ? const Color(0xFF00E5CC)
+                              : const Color(0xFF4A6A85),
+                        ),
+                      ),
                     ],
                   ),
                 );

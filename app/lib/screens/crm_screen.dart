@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants.dart';
@@ -10,8 +11,9 @@ import '../widgets/buttons.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/lead_tile.dart';
 import '../widgets/search_filter.dart';
-import 'lead_detail_screen.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/inputs.dart';
+import 'lead_detail_screen.dart';
 
 class CrmScreen extends ConsumerStatefulWidget {
   const CrmScreen({super.key});
@@ -49,9 +51,10 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase().trim();
       list = list.where((l) {
-        return l.name.toLowerCase().contains(q) ||
-            l.phone.contains(_search) ||
-            l.campaign.toLowerCase().contains(q);
+        final campaign = l.campaign.toLowerCase();
+        final phone = l.phone;
+        final name = l.name.toLowerCase();
+        return name.contains(q) || phone.contains(_search) || campaign.contains(q);
       }).toList();
     }
 
@@ -99,12 +102,193 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
     await ref.read(leadsProvider.notifier).refresh();
 
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('✅ CRM refreshed'),
         backgroundColor: C.success,
         duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  Future<void> _showAddLeadSheet() async {
+    HapticFeedback.mediumImpact();
+
+    final nameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final campaignCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+
+    String stage = 'New';
+
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: BackdropFilter(
+            filter: Glass.blur,
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [C.bgCard, C.bgDeep]),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border.all(color: C.glassBorder),
+              ),
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                20 + MediaQuery.of(ctx).viewInsets.bottom,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: C.glassBorder,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Add Lead',
+                      style: TextStyle(
+                        color: C.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Creates lead in Worker (D1) and enters CRM pipeline',
+                      style: TextStyle(color: C.textSecondary, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+
+                    GlassInput(
+                      label: 'Name',
+                      hint: 'Customer name',
+                      controller: nameCtrl,
+                      prefixIcon: Icons.person_rounded,
+                    ),
+                    const SizedBox(height: 12),
+                    GlassInput(
+                      label: 'Phone',
+                      hint: '+91XXXXXXXXXX',
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      prefixIcon: Icons.call_rounded,
+                    ),
+                    const SizedBox(height: 12),
+                    GlassInput(
+                      label: 'Campaign (optional)',
+                      hint: 'Campaign name',
+                      controller: campaignCtrl,
+                      prefixIcon: Icons.campaign_rounded,
+                    ),
+                    const SizedBox(height: 12),
+                    GlassInput(
+                      label: 'Notes (optional)',
+                      hint: 'Any context',
+                      controller: notesCtrl,
+                      prefixIcon: Icons.notes_rounded,
+                      maxLines: 3,
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text(
+                      'Stage',
+                      style: TextStyle(color: C.textMuted, fontSize: 11),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: K.crmStages.map((s) {
+                        final sel = stage == s;
+                        
+                        return FilterChip2(
+                          label: s,
+                          selected: sel,
+                          onTap: () => setSheetState(() => stage = s),
+                        );
+                      }).toList(),
+                    ),
+
+                    const SizedBox(height: 18),
+                    PrimaryBtn(
+                      label: 'Create Lead',
+                      icon: Icons.check_rounded,
+                      onTap: () async {
+                        final name = nameCtrl.text.trim();
+                        final phone = phoneCtrl.text.trim();
+
+                        if (name.isEmpty || phone.isEmpty) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Name and phone are required'),
+                              backgroundColor: C.error,
+                            ),
+                          );
+                          return;
+                        }
+
+                        try {
+                          final api = ref.read(workerApiProvider);
+
+                          await api.createLead(
+                            name: name,
+                            phone: phone,
+                            email: null,
+                            campaign: campaignCtrl.text.trim().isEmpty
+                                ? null
+                                : campaignCtrl.text.trim(),
+                            campaignId: null,
+                            stage: stage,
+                            source: 'Manual',
+                            product: null,
+                            value: 0,
+                            notes: notesCtrl.text.trim().isEmpty
+                                ? null
+                                : notesCtrl.text.trim(),
+                          );
+
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+
+                          ref.invalidate(leadsProvider);
+
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('✅ Lead created'),
+                              backgroundColor: C.success,
+                            ),
+                          );
+                        } catch (_) {
+                          if (!ctx.mounted) return;
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Failed to create lead'),
+                              backgroundColor: C.error,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -209,10 +393,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
                 ),
                 Text(
                   '$totalLeads leads • ${U.money(pipelineValue)} pipeline',
-                  style: const TextStyle(
-                    color: C.textSecondary,
-                    fontSize: 12,
-                  ),
+                  style: const TextStyle(color: C.textSecondary, fontSize: 12),
                 ),
               ],
             ),
@@ -220,13 +401,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
           OutlineBtn(
             label: 'Add Lead',
             icon: Icons.person_add_rounded,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Add Lead flow will be wired next'),
-                ),
-              );
-            },
+            onTap: _showAddLeadSheet,
           ),
         ],
       ),
@@ -304,10 +479,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
           const Spacer(),
           Text(
             '$count leads',
-            style: const TextStyle(
-              color: C.textMuted,
-              fontSize: 11,
-            ),
+            style: const TextStyle(color: C.textMuted, fontSize: 11),
           ),
         ],
       ),
@@ -326,11 +498,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
         ),
         child: Row(
           children: [
-            Icon(
-              icon,
-              color: sel ? Colors.black : C.textMuted,
-              size: 14,
-            ),
+            Icon(icon, color: sel ? Colors.black : C.textMuted, size: 14),
             const SizedBox(width: 4),
             Text(
               label,
@@ -376,8 +544,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: K.crmStages.map((stage) {
-          final stageLeads =
-              filteredLeads.where((l) => l.stage == stage).toList();
+          final stageLeads = filteredLeads.where((l) => l.stage == stage).toList();
           final color = _stageColor(stage);
 
           return Container(
@@ -388,17 +555,13 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
               children: [
                 GlassCard(
                   radius: 12,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Row(
                     children: [
                       Container(
                         width: 8,
                         height: 8,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                        ),
+                        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
                       ),
                       const SizedBox(width: 8),
                       Text(
@@ -411,8 +574,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
                       ),
                       const Spacer(),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
                           color: color.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(8),
@@ -446,9 +608,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => LeadDetailScreen(lead: lead),
-        ),
+        MaterialPageRoute(builder: (_) => LeadDetailScreen(lead: lead)),
       ),
       child: GlassCard(
         radius: 14,
@@ -491,10 +651,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
                       ),
                       Text(
                         lead.phone,
-                        style: const TextStyle(
-                          color: C.textMuted,
-                          fontSize: 10,
-                        ),
+                        style: const TextStyle(color: C.textMuted, fontSize: 10),
                       ),
                     ],
                   ),
@@ -504,19 +661,12 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(
-                  Icons.campaign_rounded,
-                  color: C.textMuted,
-                  size: 11,
-                ),
+                const Icon(Icons.campaign_rounded, color: C.textMuted, size: 11),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
                     lead.campaign,
-                    style: const TextStyle(
-                      color: C.textMuted,
-                      fontSize: 10,
-                    ),
+                    style: const TextStyle(color: C.textMuted, fontSize: 10),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -526,19 +676,12 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
               const SizedBox(height: 3),
               Row(
                 children: [
-                  const Icon(
-                    Icons.shopping_bag_outlined,
-                    color: C.textMuted,
-                    size: 11,
-                  ),
+                  const Icon(Icons.shopping_bag_outlined, color: C.textMuted, size: 11),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       lead.product!,
-                      style: const TextStyle(
-                        color: C.textSecondary,
-                        fontSize: 10,
-                      ),
+                      style: const TextStyle(color: C.textSecondary, fontSize: 10),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -562,10 +705,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
                   const SizedBox.shrink(),
                 Text(
                   U.ago(lead.updatedAt),
-                  style: const TextStyle(
-                    color: C.textMuted,
-                    fontSize: 10,
-                  ),
+                  style: const TextStyle(color: C.textMuted, fontSize: 10),
                 ),
               ],
             ),
@@ -596,9 +736,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
               date: l.updatedAt,
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => LeadDetailScreen(lead: l),
-                ),
+                MaterialPageRoute(builder: (_) => LeadDetailScreen(lead: l)),
               ),
             ),
           );
@@ -617,11 +755,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.people_alt_outlined,
-                color: C.error,
-                size: 28,
-              ),
+              const Icon(Icons.people_alt_outlined, color: C.error, size: 28),
               const SizedBox(height: 12),
               const Text(
                 'Unable to load CRM data',
@@ -635,10 +769,7 @@ class _CrmScreenState extends ConsumerState<CrmScreen>
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: C.textSecondary,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: C.textSecondary, fontSize: 12),
               ),
               const SizedBox(height: 14),
               OutlineBtn(

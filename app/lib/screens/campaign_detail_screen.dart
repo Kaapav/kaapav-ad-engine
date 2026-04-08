@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/constants.dart';
 import '../core/theme.dart';
@@ -30,6 +31,7 @@ class CampaignDetailScreen extends ConsumerStatefulWidget {
 class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _bgC;
+
   int _chartMetric = 0; // 0=ROAS, 1=Spend
   bool _busy = false;
 
@@ -48,9 +50,25 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
     super.dispose();
   }
 
+  void _snack(String msg, {Color? color}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: color ?? C.bgCard,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  void _notReady(String feature) {
+    _snack('$feature not implemented yet.', color: C.bgCard);
+  }
+
   Future<void> _refresh() async {
     ref.invalidate(campaignDetailProvider(widget.campaign.id));
     ref.invalidate(campaignsProvider);
+
     await Future.wait([
       ref.read(campaignDetailProvider(widget.campaign.id).future),
       ref.read(campaignsProvider.notifier).refresh(),
@@ -61,24 +79,21 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
     if (_busy) return;
     _busy = true;
 
+    final wasActive = c.isActive;
+
     final notifier = ref.read(campaignsProvider.notifier);
     try {
       await notifier.toggleStatus(c.id);
       ref.invalidate(campaignDetailProvider(c.id));
-      if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Campaign ${c.isActive ? "paused" : "activated"}',
-          ),
-          backgroundColor: C.bgCard,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
+      if (!mounted) return;
+      _snack(
+        wasActive ? 'Campaign paused' : 'Campaign activated',
+        color: C.bgCard,
       );
+    } catch (_) {
+      if (!mounted) return;
+      _snack('Failed to update status', color: C.error);
     } finally {
       _busy = false;
     }
@@ -94,16 +109,10 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
       ref.invalidate(campaignDetailProvider(c.id));
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Budget scaled to ${U.money(newBudget)}/day'),
-          backgroundColor: C.bgCard,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      );
+      _snack('Budget scaled to ${U.money(newBudget)}/day');
+    } catch (_) {
+      if (!mounted) return;
+      _snack('Failed to scale budget', color: C.error);
     } finally {
       _busy = false;
     }
@@ -113,7 +122,9 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
   Widget build(BuildContext context) {
     final campaignAsync = ref.watch(campaignDetailProvider(widget.campaign.id));
     final c = campaignAsync.valueOrNull ?? widget.campaign;
+
     final isFb = c.platform.toLowerCase() == 'facebook';
+    final platformColor = isFb ? C.facebook : C.instagram;
 
     return Scaffold(
       backgroundColor: C.bgDeep,
@@ -130,7 +141,7 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
                   ),
                   radius: 1.5,
                   colors: [
-                    (isFb ? C.facebook : C.instagram).withValues(alpha: 0.06),
+                    platformColor.withValues(alpha: 0.06),
                     C.primary.withValues(alpha: 0.03),
                     C.bgDeep,
                   ],
@@ -175,6 +186,12 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
   }
 
   Widget _header(Campaign c, bool isFb) {
+    final platformGrad = LinearGradient(
+      colors: isFb
+          ? [C.facebook, const Color(0xFF0A5BC4)]
+          : [C.instagram, const Color(0xFF833AB4)],
+    );
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(
@@ -197,11 +214,7 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: isFb
-                    ? [C.facebook, const Color(0xFF0A5BC4)]
-                    : [C.instagram, const Color(0xFF833AB4)],
-              ),
+              gradient: platformGrad,
               borderRadius: BorderRadius.circular(11),
             ),
             child: Icon(
@@ -281,7 +294,8 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
                 await _toggleStatus(c);
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   gradient: c.isActive ? C.dangerGrad : C.successGrad,
                   borderRadius: BorderRadius.circular(8),
@@ -328,18 +342,14 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
             _heroItem(
               'ROAS',
               U.roas(c.roas),
-              c.roas >= 4 ? C.success : c.roas >= 2 ? C.primary : C.error,
+              c.roas >= 4 ? C.success : (c.roas >= 2 ? C.primary : C.error),
             ),
             _divider(),
             _heroItem('Spend', U.money(c.spend), C.blue),
             _divider(),
             _heroItem('Revenue', U.money(c.revenue), C.success),
             _divider(),
-            _heroItem(
-              'CPA',
-              U.money(c.cpa),
-              c.cpa <= 150 ? C.success : C.warning,
-            ),
+            _heroItem('CPA', U.money(c.cpa), c.cpa <= 150 ? C.success : C.warning),
           ],
         ),
       ),
@@ -416,8 +426,9 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
                               style: TextStyle(
                                 color: sel ? Colors.black : C.textMuted,
                                 fontSize: 10,
-                                fontWeight:
-                                    sel ? FontWeight.w700 : FontWeight.w400,
+                                fontWeight: sel
+                                    ? FontWeight.w700
+                                    : FontWeight.w400,
                               ),
                             ),
                           ),
@@ -503,7 +514,7 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
                 label: 'Frequency',
                 value: c.frequency.toStringAsFixed(2),
                 icon: Icons.repeat_rounded,
-                color: c.frequency > 3 ? C.error : C.textSecondary,
+                color: c.frequency >= 3.5 ? C.warning : C.textSecondary,
               ),
               MetricCard(
                 label: 'Daily Budget',
@@ -525,10 +536,12 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
         children: [
           SectionHeader(title: 'Ad Sets (${c.adSets.length})'),
           const SizedBox(height: 10),
-          ...c.adSets.map((as_) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _adSetTile(as_),
-              )),
+          ...c.adSets.map(
+            (as_) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _adSetTile(as_),
+            ),
+          ),
         ],
       ),
     );
@@ -570,35 +583,6 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
               _adSetMetric('Conv.', '${adSet.conversions}', C.success),
             ],
           ),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: C.glassWhite,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: C.glassBorder),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _targetRow(
-                  '👤',
-                  '${adSet.targeting.genders.join(", ")} • ${adSet.targeting.ageMin}-${adSet.targeting.ageMax}',
-                ),
-                if (adSet.targeting.locations != null &&
-                    adSet.targeting.locations!.isNotEmpty)
-                  _targetRow('📍', adSet.targeting.locations!.join(', ')),
-                if (adSet.targeting.interests != null &&
-                    adSet.targeting.interests!.isNotEmpty)
-                  _targetRow('🎯', adSet.targeting.interests!.join(', ')),
-                if (adSet.targeting.lookalike != null)
-                  _targetRow('👥', adSet.targeting.lookalike!),
-                if (adSet.targeting.customAudience != null)
-                  _targetRow('🔄', adSet.targeting.customAudience!),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -618,25 +602,6 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
           ),
           const SizedBox(height: 1),
           Text(label, style: const TextStyle(color: C.textMuted, fontSize: 9)),
-        ],
-      ),
-    );
-  }
-
-  Widget _targetRow(String emoji, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Row(
-        children: [
-          Text(emoji, style: const TextStyle(fontSize: 11)),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(color: C.textSecondary, fontSize: 11),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
         ],
       ),
     );
@@ -662,10 +627,10 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
               const SizedBox(width: 8),
               Expanded(
                 child: _actionBtn(
-                  Icons.content_copy_rounded,
-                  'Duplicate',
-                  C.blue,
-                  () {},
+                  Icons.people_alt_rounded,
+                  'Open CRM',
+                  C.purple,
+                  () => context.go('/crm'),
                 ),
               ),
             ],
@@ -675,19 +640,19 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
             children: [
               Expanded(
                 child: _actionBtn(
-                  Icons.people_alt_rounded,
-                  'View Leads',
-                  C.purple,
-                  () {},
+                  Icons.insights_rounded,
+                  'Analytics',
+                  C.blue,
+                  () => context.push('/more/analytics'),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: _actionBtn(
-                  Icons.insights_rounded,
-                  'Export Report',
-                  C.primary,
-                  () {},
+                  Icons.table_chart_rounded,
+                  'Sheets',
+                  C.success,
+                  () => context.push('/more/sheets'),
                 ),
               ),
             ],
@@ -812,20 +777,6 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
                     inactiveColor: C.glassBorder,
                     onChanged: (v) => setModalState(() => scalePct = v),
                   ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: ['+10%', '+25%', '+50%', '+100%']
-                        .map(
-                          (t) => Text(
-                            t,
-                            style: const TextStyle(
-                              color: C.textMuted,
-                              fontSize: 10,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
                   const SizedBox(height: 20),
                   PrimaryBtn(
                     label: 'Apply Scale',
@@ -858,7 +809,8 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
           child: Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: [C.bgCard, C.bgDeep]),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(24)),
               border: Border.all(color: C.glassBorder),
             ),
             padding: const EdgeInsets.all(20),
@@ -876,11 +828,28 @@ class _CampaignDetailScreenState extends ConsumerState<CampaignDetailScreen>
                   ),
                 ),
                 const SizedBox(height: 16),
-                _sheetOption(Icons.edit_rounded, 'Edit Campaign', C.primary, () {}),
-                _sheetOption(Icons.content_copy_rounded, 'Duplicate', C.blue, () {}),
-                _sheetOption(Icons.file_download_outlined, 'Export Report', C.success, () {}),
-                _sheetOption(Icons.share_rounded, 'Share Insights', C.purple, () {}),
-                _sheetOption(Icons.delete_outline_rounded, 'Delete Campaign', C.error, () {}),
+                _sheetOption(
+                  Icons.copy_rounded,
+                  'Copy Campaign ID',
+                  C.primary,
+                  () async {
+                    await Clipboard.setData(ClipboardData(text: c.id));
+                    if (!mounted) return;
+                    _snack('✅ Campaign ID copied');
+                  },
+                ),
+                _sheetOption(
+                  Icons.picture_as_pdf_rounded,
+                  'Export Report',
+                  C.success,
+                  () => _notReady('Export report'),
+                ),
+                _sheetOption(
+                  Icons.content_copy_rounded,
+                  'Duplicate Campaign',
+                  C.blue,
+                  () => _notReady('Duplicate campaign'),
+                ),
                 const SizedBox(height: 16),
               ],
             ),

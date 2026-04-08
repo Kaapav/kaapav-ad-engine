@@ -84,6 +84,11 @@ class MetaAuth {
     await _secure.delete(key: _workerSessionToken);
   }
 
+  Future<bool> hasSessionToken() async {
+  final t = await getSessionToken();
+  return t != null && t.trim().isNotEmpty;
+}
+
   Future<void> logout() async {
     await _secure.delete(key: _tokenKey);
     await _secure.delete(key: _accountKey);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/constants.dart';
 import '../core/theme.dart';
@@ -11,8 +12,6 @@ import '../widgets/buttons.dart';
 import '../widgets/campaign_tile.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/search_filter.dart';
-import 'campaign_detail_screen.dart';
-import 'create_campaign_screen.dart';
 import '../widgets/empty_state.dart';
 
 class CampaignsScreen extends ConsumerStatefulWidget {
@@ -33,7 +32,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
 
   final _statusOptions = ['All', 'Active', 'Paused', 'Learning'];
   final _objectiveOptions = ['All', ...K.objectives.values];
-  final _sortOptions = {
+  final _sortOptions = <String, String>{
     'roas': 'ROAS',
     'spend': 'Spend',
     'cpa': 'CPA',
@@ -55,6 +54,21 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
     super.dispose();
   }
 
+  bool _statusMatch(Campaign c) {
+    switch (_statusFilter) {
+      case 'Active':
+        return c.isActive;
+      case 'Paused':
+        return c.isPaused;
+      case 'Learning':
+        return c.isLearning ||
+            c.status.toLowerCase().contains('learning') ||
+            c.status.toLowerCase().contains('in_process');
+      default:
+        return true;
+    }
+  }
+
   List<Campaign> _applyFilters(List<Campaign> source) {
     var list = source.toList();
 
@@ -64,16 +78,11 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
     }
 
     if (_statusFilter != 'All') {
-      list = list.where((c) {
-        final normalized = c.status.trim().toLowerCase();
-        return normalized == _statusFilter.toLowerCase();
-      }).toList();
+      list = list.where(_statusMatch).toList();
     }
 
     if (_objectiveFilter != 'All') {
-      list = list.where((c) {
-        return K.objectives[c.objective] == _objectiveFilter;
-      }).toList();
+      list = list.where((c) => K.objectives[c.objective] == _objectiveFilter).toList();
     }
 
     switch (_sortBy) {
@@ -105,12 +114,11 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
     await ref.read(campaignsProvider.notifier).refresh();
 
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('✅ Campaigns refreshed'),
+      const SnackBar(
+        content: Text('✅ Campaigns refreshed'),
         backgroundColor: C.success,
-        duration: const Duration(seconds: 1),
+        duration: Duration(seconds: 1),
       ),
     );
   }
@@ -153,9 +161,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
                       child: CircularProgressIndicator(color: C.primary),
                     ),
                   ),
-                  error: (error, _) => Expanded(
-                    child: _errorState(error.toString()),
-                  ),
+                  error: (error, _) => Expanded(child: _errorState(error.toString())),
                   data: (allCampaigns) {
                     final campaigns = _applyFilters(allCampaigns);
 
@@ -185,20 +191,13 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
                                     color: C.primary,
                                     backgroundColor: C.bgCard,
                                     child: ListView.builder(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        16,
-                                        6,
-                                        16,
-                                        100,
-                                      ),
-                                      physics:
-                                          const AlwaysScrollableScrollPhysics(),
+                                      padding: const EdgeInsets.fromLTRB(16, 6, 16, 100),
+                                      physics: const AlwaysScrollableScrollPhysics(),
                                       itemCount: campaigns.length,
                                       itemBuilder: (_, i) {
                                         final c = campaigns[i];
                                         return Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 8),
+                                          padding: const EdgeInsets.only(bottom: 8),
                                           child: CampaignTile(
                                             name: c.name,
                                             status: c.status,
@@ -206,14 +205,9 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
                                             spend: c.spend,
                                             roas: c.roas,
                                             cpa: c.cpa,
-                                            onTap: () => Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (_) =>
-                                                    CampaignDetailScreen(
-                                                  campaign: c,
-                                                ),
-                                              ),
+                                            onTap: () => context.push(
+                                              '/campaign-detail',
+                                              extra: c,
                                             ),
                                           ),
                                         );
@@ -252,7 +246,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
                   ),
                 ),
                 Text(
-                  'Manage your Meta ad campaigns',
+                  'Worker-synced Meta campaigns',
                   style: TextStyle(
                     color: C.textSecondary,
                     fontSize: 12,
@@ -264,12 +258,15 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
           OutlineBtn(
             label: 'Create',
             icon: Icons.add_rounded,
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const CreateCampaignScreen(),
-              ),
-            ),
+            onTap: () {
+              HapticFeedback.lightImpact();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Create campaign flow will be wired via Worker next.'),
+                  backgroundColor: C.bgCard,
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -365,11 +362,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
-                    Icons.sort_rounded,
-                    color: C.primary,
-                    size: 14,
-                  ),
+                  const Icon(Icons.sort_rounded, color: C.primary, size: 14),
                   const SizedBox(width: 4),
                   Text(
                     _sortOptions[_sortBy]!,
@@ -400,8 +393,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
           child: Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: [C.bgCard, C.bgDeep]),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
               border: Border.all(color: C.glassBorder),
             ),
             padding: const EdgeInsets.all(20),
@@ -474,8 +466,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
           child: Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: [C.bgCard, C.bgDeep]),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
               border: Border.all(color: C.glassBorder),
             ),
             padding: const EdgeInsets.all(20),
@@ -569,11 +560,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.wifi_off_rounded,
-                color: C.error,
-                size: 28,
-              ),
+              const Icon(Icons.wifi_off_rounded, color: C.error, size: 28),
               const SizedBox(height: 12),
               const Text(
                 'Unable to load campaigns',
@@ -587,10 +574,7 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: C.textSecondary,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: C.textSecondary, fontSize: 12),
               ),
               const SizedBox(height: 14),
               OutlineBtn(

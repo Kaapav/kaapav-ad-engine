@@ -7,12 +7,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme.dart';
 import '../core/utils.dart';
 import '../models/rule.dart';
+import '../models/optimization_recommendation.dart';
 import '../providers/app_providers.dart';
+import '../providers/intelligence_provider.dart';
 import '../widgets/buttons.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/inputs.dart';
 import '../widgets/rule_card.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/recommendation_card.dart';
 
 class AutoPilotScreen extends ConsumerStatefulWidget {
   const AutoPilotScreen({super.key});
@@ -24,6 +27,8 @@ class AutoPilotScreen extends ConsumerStatefulWidget {
 class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _bgC;
+
+  /// 0 = Rules, 1 = Activity, 2 = AI Decisions
   int _viewMode = 0;
 
   @override
@@ -42,15 +47,23 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
   }
 
   Future<void> _refresh() async {
-    await ref.read(rulesProvider.notifier).refresh();
+    // Don’t assume every notifier has refresh/load.
+    // Invalidate is safe and works for Async providers & notifiers.
+    ref.invalidate(rulesProvider);
+    ref.invalidate(activityLogProvider);
+
+    // Refresh recommendations list (family provider)
+    ref.invalidate(
+      recommendationsProvider(const RecommendationQuery(status: 'open')),
+    );
 
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('✅ AutoPilot refreshed'),
+      const SnackBar(
+        content: Text('✅ AutoPilot refreshed'),
         backgroundColor: C.success,
-        duration: const Duration(seconds: 1),
+        duration: Duration(seconds: 1),
       ),
     );
   }
@@ -60,9 +73,16 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     final rulesAsync = ref.watch(rulesProvider);
     final activityLogAsync = ref.watch(activityLogProvider);
 
+    final recsAsync = ref.watch(
+      recommendationsProvider(const RecommendationQuery(status: 'open')),
+    );
+
     final rules = rulesAsync.valueOrNull ?? const <AutoRule>[];
     final activeRules = rules.where((r) => r.enabled).length;
     final totalTriggers = rules.fold<int>(0, (s, r) => s + r.triggeredCount);
+
+    final openRecs = recsAsync.valueOrNull ?? const <OptimizationRecommendation>[];
+    final criticalRecs = openRecs.where((r) => r.priority == 'critical').length;
 
     return Scaffold(
       backgroundColor: C.bgDeep,
@@ -92,7 +112,13 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
             child: Column(
               children: [
                 _header(),
-                _statsBar(activeRules, rules.length, totalTriggers),
+                _statsBar(
+                  activeRules: activeRules,
+                  totalRules: rules.length,
+                  triggers: totalTriggers,
+                  openRecs: openRecs.length,
+                  criticalRecs: criticalRecs,
+                ),
                 _viewToggle(),
                 const SizedBox(height: 8),
                 Expanded(
@@ -100,9 +126,11 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                     onRefresh: _refresh,
                     color: C.primary,
                     backgroundColor: C.bgCard,
-                    child: _viewMode == 0
-                        ? _rulesAsyncView(rulesAsync)
-                        : _activityAsyncView(activityLogAsync),
+                    child: _viewBody(
+                      rulesAsync: rulesAsync,
+                      activityAsync: activityLogAsync,
+                      recsAsync: recsAsync,
+                    ),
                   ),
                 ),
               ],
@@ -111,6 +139,16 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         ],
       ),
     );
+  }
+
+  Widget _viewBody({
+    required AsyncValue<List<AutoRule>> rulesAsync,
+    required AsyncValue<List<ActivityEntry>> activityAsync,
+    required AsyncValue<List<OptimizationRecommendation>> recsAsync,
+  }) {
+    if (_viewMode == 0) return _rulesAsyncView(rulesAsync);
+    if (_viewMode == 1) return _activityAsyncView(activityAsync);
+    return _decisionsAsyncView(recsAsync);
   }
 
   Widget _header() {
@@ -131,7 +169,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                   ),
                 ),
                 Text(
-                  'Automated rules & campaign actions',
+                  'Rules • Activity • AI Decisions',
                   style: TextStyle(
                     color: C.textSecondary,
                     fontSize: 12,
@@ -150,7 +188,13 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     );
   }
 
-  Widget _statsBar(int active, int total, int triggers) {
+  Widget _statsBar({
+    required int activeRules,
+    required int totalRules,
+    required int triggers,
+    required int openRecs,
+    required int criticalRecs,
+  }) {
     final savedEstimate = triggers * 300.0;
 
     return Padding(
@@ -162,8 +206,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
             _statItem(
-              'Active',
-              '$active/$total',
+              'Active Rules',
+              '$activeRules/$totalRules',
               C.success,
               Icons.toggle_on_rounded,
             ),
@@ -173,6 +217,15 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
               '$triggers',
               C.purple,
               Icons.electric_bolt_rounded,
+            ),
+            Container(width: 1, height: 28, color: C.glassBorder),
+            _statItem(
+              'Open Recs',
+              '$openRecs',
+              criticalRecs > 0 ? C.error : C.gold,
+              criticalRecs > 0
+                  ? Icons.warning_amber_rounded
+                  : Icons.auto_awesome_rounded,
             ),
             Container(width: 1, height: 28, color: C.glassBorder),
             _statItem(
@@ -187,12 +240,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     );
   }
 
-  Widget _statItem(
-    String label,
-    String value,
-    Color color,
-    IconData icon,
-  ) {
+  Widget _statItem(String label, String value, Color color, IconData icon) {
     return Column(
       children: [
         Icon(icon, color: color, size: 18),
@@ -231,7 +279,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
             child: Row(
               children: [
                 _toggleBtn(0, Icons.rule_rounded, 'Rules'),
-                _toggleBtn(1, Icons.history_rounded, 'Activity Log'),
+                _toggleBtn(1, Icons.history_rounded, 'Activity'),
+                _toggleBtn(2, Icons.auto_awesome_rounded, 'AI Decisions'),
               ],
             ),
           ),
@@ -253,11 +302,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         ),
         child: Row(
           children: [
-            Icon(
-              icon,
-              color: sel ? Colors.black : C.textMuted,
-              size: 14,
-            ),
+            Icon(icon, color: sel ? Colors.black : C.textMuted, size: 14),
             const SizedBox(width: 4),
             Text(
               label,
@@ -273,6 +318,10 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     );
   }
 
+  // ---------------------------
+  // Rules
+  // ---------------------------
+
   Widget _rulesAsyncView(AsyncValue<List<AutoRule>> rulesAsync) {
     return rulesAsync.when(
       loading: () => const Center(
@@ -281,7 +330,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       error: (error, _) => _errorState(
         title: 'Unable to load rules',
         message: error.toString(),
-        onRetry: () => ref.read(rulesProvider.notifier).load(),
+        onRetry: () => ref.invalidate(rulesProvider),
       ),
       data: (rules) => _rulesView(rules),
     );
@@ -340,9 +389,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
               action: rule.action,
               enabled: rule.enabled,
               triggeredCount: rule.triggeredCount,
-              lastTriggered: rule.lastTriggered != null
-                  ? U.ago(rule.lastTriggered!)
-                  : null,
+              lastTriggered:
+                  rule.lastTriggered != null ? U.ago(rule.lastTriggered!) : null,
               onToggle: (_) async {
                 HapticFeedback.lightImpact();
                 await ref.read(rulesProvider.notifier).toggle(rule.id);
@@ -359,13 +407,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: C.bgCard,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
-        title: const Text(
-          'Delete Rule',
-          style: TextStyle(color: C.textPrimary),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Delete Rule', style: TextStyle(color: C.textPrimary)),
         content: Text(
           'Are you sure you want to delete "$name"?',
           style: const TextStyle(color: C.textSecondary),
@@ -373,22 +416,20 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: C.textSecondary),
-            ),
+            child: const Text('Cancel', style: TextStyle(color: C.textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(
-              'Delete',
-              style: TextStyle(color: C.error),
-            ),
+            child: const Text('Delete', style: TextStyle(color: C.error)),
           ),
         ],
       ),
     );
   }
+
+  // ---------------------------
+  // Activity
+  // ---------------------------
 
   Widget _activityAsyncView(AsyncValue<List<ActivityEntry>> activityAsync) {
     return activityAsync.when(
@@ -398,7 +439,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       error: (error, _) => _errorState(
         title: 'Unable to load activity',
         message: error.toString(),
-        onRetry: () {},
+        onRetry: () => ref.invalidate(activityLogProvider),
       ),
       data: (logs) => _activityView(logs),
     );
@@ -409,7 +450,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       return const EmptyState(
         icon: Icons.history_rounded,
         title: 'No activity yet',
-        subtitle: 'Rule triggers will appear here',
+        subtitle: 'Rule triggers and actions will appear here',
       );
     }
 
@@ -417,11 +458,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 100),
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: logs.length,
-      itemBuilder: (_, i) {
-        final log = logs[i];
-        final isLast = i == logs.length - 1;
-        return _activityItem(log, isLast);
-      },
+      itemBuilder: (_, i) => _activityItem(logs[i], i == logs.length - 1),
     );
   }
 
@@ -556,6 +593,80 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     );
   }
 
+  // ---------------------------
+  // AI Decisions (Worker Recommendations)
+  // ---------------------------
+
+  Widget _decisionsAsyncView(
+    AsyncValue<List<OptimizationRecommendation>> recsAsync,
+  ) {
+    return recsAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: C.primary),
+      ),
+      error: (error, _) => _errorState(
+        title: 'Unable to load recommendations',
+        message: error.toString(),
+        onRetry: () => ref.invalidate(
+          recommendationsProvider(const RecommendationQuery(status: 'open')),
+        ),
+      ),
+      data: (recs) => _decisionsView(recs),
+    );
+  }
+
+  Widget _decisionsView(List<OptimizationRecommendation> recs) {
+    if (recs.isEmpty) {
+      return const EmptyState(
+        icon: Icons.auto_awesome_rounded,
+        title: 'No recommendations',
+        subtitle: 'Run recompute to generate optimization decisions',
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 100),
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: recs.length,
+      itemBuilder: (_, i) {
+        final rec = recs[i];
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: RecommendationCard(
+            rec: rec,
+            onApply: () async {
+              HapticFeedback.mediumImpact();
+              await ref.read(intelligenceActionsProvider).apply(rec.id);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('✅ Recommendation applied'),
+                  backgroundColor: C.success,
+                ),
+              );
+            },
+            onDismiss: () async {
+              HapticFeedback.lightImpact();
+              await ref.read(intelligenceActionsProvider).dismiss(rec.id);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Dismissed'),
+                  backgroundColor: C.bgCard,
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  // ---------------------------
+  // Create Rule (same logic, cleaned execution)
+  // ---------------------------
+
   void _showCreateRule() {
     HapticFeedback.mediumImpact();
 
@@ -567,7 +678,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
     String selectedOperator = '<';
     String selectedAction = 'pause';
 
-    final metrics = [
+    final metrics = <String>[
       'roas',
       'cpa',
       'ctr',
@@ -579,9 +690,10 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       'impressions',
       'clicks',
       'conversions',
+      'leads',
     ];
 
-    final operators = ['<', '>', '<=', '>=', '==', '!='];
+    final operators = <String>['<', '>', '<=', '>=', '==', '!='];
 
     final actions = [
       {
@@ -620,15 +732,13 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => DraggableScrollableSheet(
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) => DraggableScrollableSheet(
           initialChildSize: 0.85,
           maxChildSize: 0.95,
           minChildSize: 0.5,
-          builder: (ctx, scrollCtrl) => ClipRRect(
-            borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(24),
-            ),
+          builder: (sheetCtx, scrollCtrl) => ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
               child: Container(
@@ -638,9 +748,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                     end: Alignment.bottomCenter,
                     colors: [C.bgCard, C.bgDeep],
                   ),
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(24),
-                  ),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(24)),
                   border: Border.all(color: C.glassBorder),
                 ),
                 child: ListView(
@@ -668,11 +777,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                     ),
                     const SizedBox(height: 4),
                     const Text(
-                      'Automate campaign actions based on performance',
-                      style: TextStyle(
-                        color: C.textSecondary,
-                        fontSize: 12,
-                      ),
+                      'Automate actions based on performance',
+                      style: TextStyle(color: C.textSecondary, fontSize: 12),
                     ),
                     const SizedBox(height: 24),
                     GlassInput(
@@ -682,6 +788,8 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                       prefixIcon: Icons.label_rounded,
                     ),
                     const SizedBox(height: 24),
+
+                    // Condition card
                     GlassCard(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -753,8 +861,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                                   child: Text(
                                     m.toUpperCase(),
                                     style: TextStyle(
-                                      color:
-                                          sel ? C.primary : C.textSecondary,
+                                      color: sel ? C.primary : C.textSecondary,
                                       fontSize: 10,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -769,8 +876,7 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                               Expanded(
                                 flex: 2,
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     const Text(
                                       'Operator',
@@ -796,7 +902,9 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                                             ),
                                             decoration: BoxDecoration(
                                               color: sel
-                                                  ? C.primary.withValues(alpha: 0.15)
+                                                  ? C.primary.withValues(
+                                                      alpha: 0.15,
+                                                    )
                                                   : C.glassWhite,
                                               borderRadius:
                                                   BorderRadius.circular(6),
@@ -842,7 +950,10 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                         ],
                       ),
                     ),
+
                     const SizedBox(height: 16),
+
+                    // Action card
                     GlassCard(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -954,44 +1065,65 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                         ],
                       ),
                     ),
+
                     const SizedBox(height: 24),
                     PrimaryBtn(
-                      label: '⚡ Create Rule',
+                      label: 'Create Rule',
                       onTap: () async {
-                        if (nameCtrl.text.trim().isEmpty ||
-                            thresholdCtrl.text.trim().isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: const Text(
-                                'Please fill name and threshold',
-                              ),
+                        final name = nameCtrl.text.trim();
+                        final thrText = thresholdCtrl.text.trim();
+
+                        if (name.isEmpty || thrText.isEmpty) {
+                          ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Please fill name and threshold'),
                               backgroundColor: C.error,
                             ),
                           );
                           return;
                         }
 
-                        final threshold =
-                            double.tryParse(thresholdCtrl.text.trim());
+                        final threshold = double.tryParse(thrText);
                         if (threshold == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: const Text(
-                                'Threshold must be a valid number',
-                              ),
+                          ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Threshold must be a valid number'),
                               backgroundColor: C.error,
                             ),
                           );
                           return;
                         }
 
-                        final actionValue = actionValueCtrl.text.trim().isNotEmpty
-                            ? actionValueCtrl.text.trim()
-                            : null;
+                        String? actionValue;
+                        if (selectedAction == 'scale_budget' ||
+                            selectedAction == 'reduce_budget') {
+                          final raw = actionValueCtrl.text.trim();
+                          if (raw.isEmpty) {
+                            ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                              const SnackBar(
+                                content:
+                                    Text('Please enter percentage for budget action'),
+                                backgroundColor: C.error,
+                              ),
+                            );
+                            return;
+                          }
+                          final v = double.tryParse(raw);
+                          if (v == null || v <= 0) {
+                            ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                              const SnackBar(
+                                content: Text('Percentage must be a valid number'),
+                                backgroundColor: C.error,
+                              ),
+                            );
+                            return;
+                          }
+                          actionValue = raw;
+                        }
 
                         final rule = AutoRule(
                           id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
-                          name: nameCtrl.text.trim(),
+                          name: name,
                           condition:
                               '${selectedMetric.toUpperCase()} $selectedOperator $threshold',
                           action:
@@ -1005,23 +1137,20 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                           triggeredCount: 0,
                         );
 
-await ref.read(rulesProvider.notifier).addRule(rule);
+                        await ref.read(rulesProvider.notifier).addRule(rule);
 
-if (!ctx.mounted) return;
-final navigator = Navigator.of(ctx);
-final messenger = ScaffoldMessenger.of(ctx);
-final ruleName = rule.name;
+                        if (!sheetCtx.mounted) return;
+                        Navigator.of(sheetCtx).pop();
 
-navigator.pop();
+                        HapticFeedback.heavyImpact();
 
-HapticFeedback.heavyImpact();
-
-messenger.showSnackBar(
-  SnackBar(
-    content: Text('⚡ Rule "$ruleName" created'),
-    backgroundColor: C.success,
-  ),
-);
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('✅ Rule "${rule.name}" created'),
+                            backgroundColor: C.success,
+                          ),
+                        );
                       },
                     ),
                     const SizedBox(height: 20),
@@ -1034,6 +1163,10 @@ messenger.showSnackBar(
       ),
     );
   }
+
+  // ---------------------------
+  // Shared error UI
+  // ---------------------------
 
   Widget _errorState({
     required String title,
@@ -1051,11 +1184,7 @@ messenger.showSnackBar(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
-                  Icons.error_outline_rounded,
-                  color: C.error,
-                  size: 28,
-                ),
+                const Icon(Icons.error_outline_rounded, color: C.error, size: 28),
                 const SizedBox(height: 12),
                 Text(
                   title,
@@ -1069,10 +1198,7 @@ messenger.showSnackBar(
                 Text(
                   message,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: C.textSecondary,
-                    fontSize: 12,
-                  ),
+                  style: const TextStyle(color: C.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(height: 14),
                 OutlineBtn(

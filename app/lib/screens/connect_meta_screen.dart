@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
+import 'package:go_router/go_router.dart';
+
 import '../core/theme.dart';
 import '../core/env_config.dart';
 import '../services/meta_auth.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/buttons.dart';
 import '../widgets/inputs.dart';
-import 'main_shell.dart';
+
+// Optional FCM registration (kept because your existing file already uses it)
 import '../services/fcm_service.dart';
 import '../services/local_storage.dart';
 
@@ -23,19 +26,16 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
   late final AnimationController _bgC;
   late final AnimationController _successC;
 
-  ConnectionMode _mode = ConnectionMode.worker;
-
   final _workerApiKeyCtrl = TextEditingController();
-  final _metaTokenCtrl = TextEditingController();
-  final _metaAccountCtrl = TextEditingController();
-  final _metaPixelCtrl = TextEditingController();
 
   bool _loading = false;
   bool _connected = false;
+
   bool _workerOnline = false;
   bool _checkingWorker = true;
+
   String? _errorMessage;
-  ConnectionResult? _connectionResult;
+  _ConnectionResult? _connectionResult;
 
   final _auth = MetaAuth();
   final _dio = Dio();
@@ -54,8 +54,9 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       duration: const Duration(milliseconds: 600),
     );
 
-    _checkExistingConnection();
+    _hydrateFromStorage();
     _checkWorkerStatus();
+    _autoLoginIfPossible();
   }
 
   @override
@@ -63,46 +64,13 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     _bgC.dispose();
     _successC.dispose();
     _workerApiKeyCtrl.dispose();
-    _metaTokenCtrl.dispose();
-    _metaAccountCtrl.dispose();
-    _metaPixelCtrl.dispose();
-    _dio.close();
+    _dio.close(force: true);
     super.dispose();
   }
 
-  Future<void> _checkExistingConnection() async {
-    try {
-      final hasWorkerKey = await _auth.hasApiKey();
-      if (hasWorkerKey) {
-        final valid = await _verifyWorkerConnection();
-        if (valid && mounted) {
-          _navigateToDashboard();
-          return;
-        }
-      }
-
-      final hasMetaConfig = await _auth.hasValidConfig();
-      if (hasMetaConfig && mounted) {
-        final token = await _auth.getToken();
-        final accountId = await _auth.getAccountId();
-
-        if (token != null && accountId != null) {
-          setState(() {
-            _mode = ConnectionMode.directMeta;
-            _metaTokenCtrl.text = token;
-            _metaAccountCtrl.text = accountId;
-          });
-
-          final pixelId = await _auth.getPixelId();
-          if (pixelId != null) {
-            _metaPixelCtrl.text = pixelId;
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('Check existing connection error: $e');
-    }
-  }
+  // ─────────────────────────────────────────────
+  // Helpers (no raw JSON to UI)
+  // ─────────────────────────────────────────────
 
   Map<String, dynamic>? _asMap(dynamic value) {
     if (value is Map<String, dynamic>) return value;
@@ -127,15 +95,10 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       return text.isNotEmpty ? text : fallback;
     }
 
-    if (value is List && value.isNotEmpty) {
-      return _extractErrorMessage(value.first, fallback: fallback);
-    }
-
     final map = _asMap(value);
     if (map == null) return fallback;
 
     final error = map['error'];
-
     if (error is String && error.trim().isNotEmpty) {
       return error;
     }
@@ -154,21 +117,18 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     return fallback;
   }
 
-  int? _extractErrorCode(dynamic value) {
-    final map = _asMap(value);
-    if (map == null) return null;
-
-    final errorMap = _asMap(map['error']);
-    final rawCode = errorMap?['code'] ?? map['code'];
-
-    if (rawCode is int) return rawCode;
-    return int.tryParse(rawCode?.toString() ?? '');
+  Future<void> _hydrateFromStorage() async {
+    try {
+      final apiKey = await _auth.getApiKey();
+      if (apiKey != null && apiKey.trim().isNotEmpty) {
+        _workerApiKeyCtrl.text = apiKey.trim();
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkWorkerStatus() async {
-    if (mounted) {
-      setState(() => _checkingWorker = true);
-    }
+    if (!mounted) return;
+    setState(() => _checkingWorker = true);
 
     try {
       final response = await _dio.get(
@@ -181,34 +141,81 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       );
 
       final status = response.statusCode ?? 0;
-      if (status >= 200 && status < 300) {
-        if (!mounted) return;
-        setState(() {
-          _workerOnline = true;
-          _checkingWorker = false;
-          _mode = ConnectionMode.worker;
-        });
-      } else {
-        _setWorkerOffline();
-      }
+      final ok = status >= 200 && status < 300;
+
+      if (!mounted) return;
+      setState(() {
+        _workerOnline = ok;
+        _checkingWorker = false;
+      });
     } catch (_) {
-      _setWorkerOffline();
+      if (!mounted) return;
+      setState(() {
+        _workerOnline = false;
+        _checkingWorker = false;
+      });
     }
   }
 
-  void _setWorkerOffline() {
-    if (!mounted) return;
-
-    setState(() {
-      _workerOnline = false;
-      _checkingWorker = false;
-      _mode = ConnectionMode.directMeta;
-    });
+  Future<void> _registerFcmIfPossible() async {
+    // Kept exactly in the style of your current code:
+    try {
+      final fcmToken = LocalStorageService.getSetting<String>('fcm_token');
+      if (fcmToken == null || fcmToken.trim().isEmpty) return;
+      await FCMService().registerDevice(fcmToken.trim());
+    } catch (e) {
+      debugPrint('⚠️ FCM registration skipped: $e');
+    }
   }
+
+  /// If API key exists, silently verify by calling /auth/login to refresh session.
+  Future<void> _autoLoginIfPossible() async {
+    try {
+      final apiKey = await _auth.getApiKey();
+      if (apiKey == null || apiKey.trim().isEmpty) return;
+
+      final ok = await _verifyWorkerConnection(apiKey.trim());
+      if (!ok || !mounted) return;
+
+      // Mark onboarded and go to dashboard
+      await _auth.setOnboarded();
+      if (!mounted) return;
+      context.go('/dashboard');
+    } catch (_) {
+      // no UI needed; user can connect manually
+    }
+  }
+
+  Future<bool> _verifyWorkerConnection(String apiKey) async {
+    try {
+      final response = await _dio.post(
+        EnvConfig.authLoginUrl,
+        data: {'api_key': apiKey},
+        options: Options(validateStatus: (s) => s != null && s < 500),
+      );
+
+      final map = _asMap(response.data);
+      if (map == null || map['success'] != true) return false;
+
+      final dataMap = _asMap(map['data']);
+      final sessionToken = dataMap?['token']?.toString();
+      if (sessionToken == null || sessionToken.trim().isEmpty) return false;
+
+      await _auth.saveSessionToken(sessionToken.trim());
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // Connect
+  // ─────────────────────────────────────────────
 
   Future<void> _connect() async {
     HapticFeedback.mediumImpact();
 
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _errorMessage = null;
@@ -216,11 +223,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     });
 
     try {
-      if (_mode == ConnectionMode.worker) {
-        await _connectViaWorker();
-      } else {
-        await _connectDirectMeta();
-      }
+      await _connectViaWorker();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -241,9 +244,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       final authResponse = await _dio.post(
         EnvConfig.authLoginUrl,
         data: {'api_key': apiKey},
-        options: Options(
-          validateStatus: (status) => status != null && status < 500,
-        ),
+        options: Options(validateStatus: (status) => status != null && status < 500),
       );
 
       final map = _asMap(authResponse.data);
@@ -257,43 +258,46 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       }
 
       if (map['success'] != true) {
-        throw Exception(
-          _extractErrorMessage(
-            map,
-            fallback: 'Invalid API Key',
-          ),
-        );
+        throw Exception(_extractErrorMessage(map, fallback: 'Invalid API Key'));
       }
 
       final dataMap = _asMap(map['data']);
       final sessionToken = dataMap?['token']?.toString();
 
-      if (sessionToken == null || sessionToken.isEmpty) {
+      if (sessionToken == null || sessionToken.trim().isEmpty) {
         throw Exception('Worker did not return a valid session token');
       }
 
+      // Save Worker auth
       await _auth.saveApiKey(apiKey);
-      await _auth.saveSessionToken(sessionToken);
+      await _auth.saveSessionToken(sessionToken.trim());
       await _auth.setOnboarded();
+
+      // Optional: clear legacy direct meta fields to enforce Worker-first
+      // (uses your MetaAuth API; safe even if empty)
+      try {
+        await _auth.saveToken('');
+        await _auth.saveAccountId('');
+        await _auth.savePixelId('');
+      } catch (_) {}
+
+      await _registerFcmIfPossible();
 
       if (!mounted) return;
 
       setState(() {
         _connected = true;
         _loading = false;
-        _connectionResult = ConnectionResult(
-          mode: ConnectionMode.worker,
-          workerUrl: EnvConfig.workerBaseUrl,
-          metaAccountId: null,
-          campaignCount: null,
-        );
+        _connectionResult = _ConnectionResult(workerUrl: EnvConfig.workerBaseUrl);
       });
 
       _successC.forward();
       HapticFeedback.heavyImpact();
 
-      await Future.delayed(const Duration(milliseconds: 1500));
-      if (mounted) _navigateToDashboard();
+      await Future.delayed(const Duration(milliseconds: 900));
+      if (!mounted) return;
+
+      context.go('/dashboard');
     } on DioException catch (e) {
       final responseMessage = _extractErrorMessage(
         e.response?.data,
@@ -311,205 +315,14 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     }
   }
 
-  Future<void> _connectDirectMeta() async {
-    final token = _metaTokenCtrl.text.trim();
-    final rawAccountId = _metaAccountCtrl.text.trim();
-    final pixelId = _metaPixelCtrl.text.trim();
-
-    if (token.isEmpty) throw Exception('Please enter Access Token');
-    if (rawAccountId.isEmpty) throw Exception('Please enter Ad Account ID');
-
-    final accountId =
-        rawAccountId.startsWith('act_') ? rawAccountId : 'act_$rawAccountId';
-
-    try {
-      final meResponse = await _dio.get(
-        'https://graph.facebook.com/v21.0/me',
-        queryParameters: {
-          'access_token': token,
-        },
-        options: Options(
-          validateStatus: (status) => status != null && status < 500,
-        ),
-      );
-
-      final meMap = _asMap(meResponse.data);
-      if (meMap == null) {
-        throw Exception(
-          _extractErrorMessage(
-            meResponse.data,
-            fallback: 'Invalid response from Meta while validating token',
-          ),
-        );
-      }
-
-      if (meMap['error'] != null) {
-        final code = _extractErrorCode(meMap);
-        if (code == 190) {
-          throw Exception('Access token expired. Please generate a new one.');
-        }
-        throw Exception(
-          'Invalid Meta token: ${_extractErrorMessage(meMap, fallback: 'Token validation failed')}',
-        );
-      }
-
-      final accountResponse = await _dio.get(
-        'https://graph.facebook.com/v21.0/$accountId',
-        queryParameters: {
-          'access_token': token,
-          'fields': 'name,account_status',
-        },
-        options: Options(
-          validateStatus: (status) => status != null && status < 500,
-        ),
-      );
-
-      final accountMap = _asMap(accountResponse.data);
-      if (accountMap == null) {
-        throw Exception(
-          _extractErrorMessage(
-            accountResponse.data,
-            fallback: 'Invalid response from Meta while validating Ad Account',
-          ),
-        );
-      }
-
-      if (accountMap['error'] != null) {
-        throw Exception(
-          'Cannot access Ad Account: ${_extractErrorMessage(accountMap, fallback: 'Ad Account validation failed')}',
-        );
-      }
-
-      final accountName = accountMap['name']?.toString() ?? 'Unknown';
-      final accountStatusRaw = accountMap['account_status'];
-      final statusVal = int.tryParse(accountStatusRaw?.toString() ?? '');
-
-      if (statusVal != null && statusVal != 1) {
-        throw Exception('Ad Account is disabled or restricted');
-      }
-
-      if (pixelId.isNotEmpty) {
-        final pixelResponse = await _dio.get(
-          'https://graph.facebook.com/v21.0/$pixelId',
-          queryParameters: {
-            'access_token': token,
-            'fields': 'name',
-          },
-          options: Options(
-            validateStatus: (status) => status != null && status < 500,
-          ),
-        );
-
-        final pixelMap = _asMap(pixelResponse.data);
-        if (pixelMap != null && pixelMap['error'] != null) {
-          debugPrint(
-            'Pixel validation warning: ${_extractErrorMessage(pixelMap, fallback: 'Invalid Pixel ID')}',
-          );
-        }
-      }
-
-      await _auth.saveToken(token);
-      await _auth.saveAccountId(accountId);
-      if (pixelId.isNotEmpty) {
-        await _auth.savePixelId(pixelId);
-      }
-      await _auth.setOnboarded();
-
-      try {
-        final fcmToken = LocalStorageService.getSetting<String>('fcm_token');
-        if (fcmToken != null) {
-          await FCMService().registerDevice(fcmToken);
-        }
-      } catch (e) {
-        debugPrint('⚠️ FCM registration skipped: $e');
-      }
-
-      if (!mounted) return;
-
-      setState(() {
-        _connected = true;
-        _loading = false;
-        _connectionResult = ConnectionResult(
-          mode: ConnectionMode.directMeta,
-          workerUrl: null,
-          metaAccountId: accountId,
-          metaAccountName: accountName,
-          metaPixelId: pixelId.isNotEmpty ? pixelId : null,
-        );
-      });
-
-      _successC.forward();
-      HapticFeedback.heavyImpact();
-
-      await Future.delayed(const Duration(milliseconds: 1500));
-      if (mounted) _navigateToDashboard();
-    } on DioException catch (e) {
-      final code = _extractErrorCode(e.response?.data);
-      final message = _extractErrorMessage(
-        e.response?.data,
-        fallback: e.message ?? 'Meta API error',
-      );
-
-      if (code == 190) {
-        throw Exception('Access token expired. Please generate a new one.');
-      } else if (e.response?.statusCode == 403) {
-        throw Exception('Permission denied. Check token permissions.');
-      } else {
-        throw Exception(message);
-      }
-    }
+  bool _canConnect() {
+    if (_connected) return true;
+    return _workerApiKeyCtrl.text.trim().isNotEmpty && !_loading;
   }
 
-  Future<bool> _verifyWorkerConnection() async {
-    try {
-      final apiKey = await _auth.getApiKey();
-      if (apiKey == null || apiKey.isEmpty) return false;
-
-      final response = await _dio.post(
-        EnvConfig.authLoginUrl,
-        data: {'api_key': apiKey},
-        options: Options(
-          validateStatus: (status) => status != null && status < 500,
-        ),
-      );
-
-      final map = _asMap(response.data);
-      if (map == null || map['success'] != true) {
-        return false;
-      }
-
-      final dataMap = _asMap(map['data']);
-      final sessionToken = dataMap?['token']?.toString();
-      if (sessionToken == null || sessionToken.isEmpty) {
-        return false;
-      }
-
-      await _auth.saveSessionToken(sessionToken);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  void _navigateToDashboard() {
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const MainShell(),
-        transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(
-            opacity: animation,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.95, end: 1.0).animate(
-                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-              ),
-              child: child,
-            ),
-          );
-        },
-        transitionDuration: const Duration(milliseconds: 600),
-      ),
-    );
-  }
+  // ─────────────────────────────────────────────
+  // UI
+  // ─────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -528,9 +341,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                   ),
                   radius: 1.5,
                   colors: [
-                    _mode == ConnectionMode.worker
-                        ? C.primary.withValues(alpha: 0.08)
-                        : C.facebook.withValues(alpha: 0.06),
+                    C.primary.withValues(alpha: 0.08),
                     C.primary.withValues(alpha: 0.03),
                     C.bgDeep,
                   ],
@@ -549,51 +360,29 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                       children: [
                         const SizedBox(height: 20),
                         _buildHeader(),
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 24),
+
                         if (!_workerOnline) _buildWorkerOfflineBanner(),
-                        if (_workerOnline) _buildModeToggle(),
-                        const SizedBox(height: 24),
                         if (_errorMessage != null) _buildErrorBanner(),
-                        if (_connected && _connectionResult != null)
-                          _buildSuccessBanner(),
+                        if (_connected && _connectionResult != null) _buildSuccessBanner(),
+
                         if (!_connected) ...[
-                          if (_mode == ConnectionMode.worker)
-                            _buildWorkerForm()
-                          else
-                            _buildMetaForm(),
+                          _buildWorkerForm(),
+                          const SizedBox(height: 24),
                         ],
-                        const SizedBox(height: 24),
+
                         PrimaryBtn(
-                          label: _connected
-                              ? 'Launch Dashboard 🚀'
-                              : (_mode == ConnectionMode.worker
-                                  ? 'Connect to Worker'
-                                  : 'Connect & Verify'),
-                          icon: _connected
-                              ? Icons.dashboard_rounded
-                              : Icons.link_rounded,
+                          label: _connected ? 'Open Dashboard' : 'Connect & Launch',
+                          icon: _connected ? Icons.dashboard_rounded : Icons.link_rounded,
                           loading: _loading,
                           onTap: _canConnect()
-                              ? (_connected ? _navigateToDashboard : _connect)
+                              ? (_connected ? () => context.go('/dashboard') : _connect)
                               : null,
                         ),
-                        const SizedBox(height: 16),
-                        if (!_connected)
-                          Center(
-                            child: TextButton(
-                              onPressed: _navigateToDashboard,
-                              child: const Text(
-                                'Skip — Use demo data',
-                                style: TextStyle(
-                                  color: C.textMuted,
-                                  fontSize: 12,
-                                  decoration: TextDecoration.underline,
-                                ),
-                              ),
-                            ),
-                          ),
-                        const SizedBox(height: 32),
-                        if (!_connected) _buildHelpSection(),
+
+                        const SizedBox(height: 20),
+                        _buildHelpSection(),
+                        const SizedBox(height: 24),
                       ],
                     ),
                   ),
@@ -608,7 +397,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
+          const SizedBox(
             width: 60,
             height: 60,
             child: CircularProgressIndicator(
@@ -619,10 +408,13 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           const SizedBox(height: 24),
           const Text(
             'Checking Worker status...',
-            style: TextStyle(
-              color: C.textSecondary,
-              fontSize: 14,
-            ),
+            style: TextStyle(color: C.textSecondary, fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          OutlineBtn(
+            label: 'Retry',
+            icon: Icons.refresh_rounded,
+            onTap: _checkWorkerStatus,
           ),
         ],
       ),
@@ -637,28 +429,17 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
             width: 80,
             height: 80,
             decoration: BoxDecoration(
-              gradient: _mode == ConnectionMode.worker
-                  ? C.primaryGrad
-                  : LinearGradient(
-                      colors: [C.facebook, C.facebook.withValues(alpha: 0.7)],
-                    ),
+              gradient: C.primaryGrad,
               borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
-                  color: (_mode == ConnectionMode.worker ? C.primary : C.facebook)
-                      .withValues(alpha: 0.3),
+                  color: C.primary.withValues(alpha: 0.3),
                   blurRadius: 20,
                   spreadRadius: 2,
                 ),
               ],
             ),
-            child: Icon(
-              _mode == ConnectionMode.worker
-                  ? Icons.cloud_rounded
-                  : Icons.facebook_rounded,
-              color: Colors.white,
-              size: 40,
-            ),
+            child: const Icon(Icons.cloud_rounded, color: Colors.white, size: 40),
           ),
           const SizedBox(height: 20),
           const Text(
@@ -672,14 +453,9 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          Text(
-            _mode == ConnectionMode.worker
-                ? 'Secure server-side authentication'
-                : 'Direct Meta Business API connection',
-            style: const TextStyle(
-              color: C.textSecondary,
-              fontSize: 13,
-            ),
+          const Text(
+            'Worker-first secure authentication (Meta tokens stay on server)',
+            style: TextStyle(color: C.textSecondary, fontSize: 13),
             textAlign: TextAlign.center,
           ),
         ],
@@ -692,131 +468,27 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: C.warning.withValues(alpha: 0.1),
+        color: C.warning.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: C.warning.withValues(alpha: 0.3)),
+        border: Border.all(color: C.warning.withValues(alpha: 0.30)),
       ),
       child: Row(
         children: [
-          Icon(Icons.warning_amber_rounded, color: C.warning, size: 24),
+          const Icon(Icons.warning_amber_rounded, color: C.warning, size: 24),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Worker Offline',
-                  style: TextStyle(
-                    color: C.warning,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Using Direct Meta mode. Worker unavailable at:\n${EnvConfig.workerBaseUrl}',
-                  style: const TextStyle(
-                    color: C.textSecondary,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
+            child: Text(
+              'Worker appears offline:\n${EnvConfig.workerBaseUrl}',
+              style: const TextStyle(color: C.textSecondary, fontSize: 11),
             ),
+          ),
+          OutlineBtn(
+            label: 'Retry',
+            icon: Icons.refresh_rounded,
+            color: C.warning,
+            onTap: _checkWorkerStatus,
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildModeToggle() {
-    return GlassCard(
-      padding: const EdgeInsets.all(4),
-      child: Row(
-        children: [
-          Expanded(
-            child: _buildModeButton(
-              mode: ConnectionMode.worker,
-              icon: Icons.cloud_rounded,
-              label: 'Worker',
-              subtitle: 'Recommended',
-              isSelected: _mode == ConnectionMode.worker,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildModeButton(
-              mode: ConnectionMode.directMeta,
-              icon: Icons.facebook_rounded,
-              label: 'Direct Meta',
-              subtitle: 'Advanced',
-              isSelected: _mode == ConnectionMode.directMeta,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildModeButton({
-    required ConnectionMode mode,
-    required IconData icon,
-    required String label,
-    required String subtitle,
-    required bool isSelected,
-  }) {
-    return GestureDetector(
-      onTap: () {
-        if (!_loading && !_connected) {
-          setState(() {
-            _mode = mode;
-            _errorMessage = null;
-          });
-          HapticFeedback.selectionClick();
-        }
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-        decoration: BoxDecoration(
-          gradient: isSelected
-              ? (mode == ConnectionMode.worker ? C.primaryGrad : C.bgGrad)
-              : null,
-          color: isSelected ? null : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected
-                ? (mode == ConnectionMode.worker ? C.primary : C.facebook)
-                : C.glassBorder,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.white : C.textSecondary,
-              size: 20,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : C.textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            Text(
-              subtitle,
-              style: TextStyle(
-                color: isSelected
-                    ? Colors.white.withValues(alpha: 0.7)
-                    : C.textMuted,
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -826,36 +498,19 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: C.error.withValues(alpha: 0.1),
+        color: C.error.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: C.error.withValues(alpha: 0.3)),
+        border: Border.all(color: C.error.withValues(alpha: 0.30)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.error_outline_rounded, color: C.error, size: 24),
+          const Icon(Icons.error_outline_rounded, color: C.error, size: 24),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Connection Failed',
-                  style: TextStyle(
-                    color: C.error,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _errorMessage!,
-                  style: const TextStyle(
-                    color: C.textSecondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+            child: Text(
+              _errorMessage!,
+              style: const TextStyle(color: C.textSecondary, fontSize: 12),
             ),
           ),
         ],
@@ -884,34 +539,25 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                     gradient: C.successGrad,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
-                    Icons.check_circle_rounded,
-                    color: Colors.white,
-                    size: 28,
-                  ),
+                  child: const Icon(Icons.check_circle_rounded, color: Colors.white, size: 28),
                 ),
                 const SizedBox(width: 16),
-                Expanded(
+                const Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Connected Successfully! ✨',
+                      Text(
+                        'Connected Successfully',
                         style: TextStyle(
                           color: C.success,
                           fontSize: 16,
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      SizedBox(height: 4),
                       Text(
-                        _connectionResult!.mode == ConnectionMode.worker
-                            ? 'Authenticated via Worker'
-                            : 'Direct Meta API connection',
-                        style: const TextStyle(
-                          color: C.textSecondary,
-                          fontSize: 12,
-                        ),
+                        'Authenticated via Worker',
+                        style: TextStyle(color: C.textSecondary, fontSize: 12),
                       ),
                     ],
                   ),
@@ -926,30 +572,21 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: C.glassBorder),
               ),
-              child: Column(
+              child: Row(
                 children: [
-                  if (_connectionResult!.mode == ConnectionMode.worker) ...[
-                    _buildInfoRow(
-                      'Worker URL',
-                      _connectionResult!.workerUrl!,
-                    ),
-                    if (_connectionResult!.campaignCount != null)
-                      _buildInfoRow(
-                        'Campaigns',
-                        '${_connectionResult!.campaignCount}',
+                  const Icon(Icons.link_rounded, color: C.primary, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _connectionResult!.workerUrl,
+                      style: const TextStyle(
+                        color: C.textPrimary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
-                  ] else ...[
-                    _buildInfoRow(
-                      'Account',
-                      _connectionResult!.metaAccountName ??
-                          _connectionResult!.metaAccountId!,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    if (_connectionResult!.metaPixelId != null)
-                      _buildInfoRow(
-                        'Pixel',
-                        _connectionResult!.metaPixelId!,
-                      ),
-                  ],
+                  ),
                 ],
               ),
             ),
@@ -959,43 +596,12 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     );
   }
 
-  Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: C.textMuted,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          Flexible(
-            child: Text(
-              value,
-              style: const TextStyle(
-                color: C.textPrimary,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-              textAlign: TextAlign.end,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildWorkerForm() {
     return Column(
       children: [
         GlassInput(
           label: 'API Secret Key',
-          hint: 'Enter your Worker API key',
+          hint: 'Enter API_SECRET_KEY',
           controller: _workerApiKeyCtrl,
           prefixIcon: Icons.vpn_key_rounded,
           obscure: true,
@@ -1012,23 +618,17 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Icon(Icons.info_outline_rounded, color: C.primary, size: 16),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Worker Configuration',
-                    style: TextStyle(
-                      color: C.primary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
+              const Text(
+                'Worker',
+                style: TextStyle(
+                  color: C.primary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-              const SizedBox(height: 10),
-              _buildConfigRow('URL', EnvConfig.workerBaseUrl),
-              _buildConfigRow('Status', _workerOnline ? 'Online ✓' : 'Checking...'),
+              const SizedBox(height: 8),
+              _configRow('URL', EnvConfig.workerBaseUrl),
+              _configRow('Status', _workerOnline ? 'Online ✓' : 'Offline'),
             ],
           ),
         ),
@@ -1036,39 +636,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
     );
   }
 
-  Widget _buildMetaForm() {
-    return Column(
-      children: [
-        GlassInput(
-          label: 'Access Token',
-          hint: 'Paste your Meta access token',
-          controller: _metaTokenCtrl,
-          prefixIcon: Icons.key_rounded,
-          obscure: true,
-          onChanged: (_) => setState(() => _errorMessage = null),
-        ),
-        const SizedBox(height: 14),
-        GlassInput(
-          label: 'Ad Account ID',
-          hint: 'e.g. act_123456789 or 123456789',
-          controller: _metaAccountCtrl,
-          prefixIcon: Icons.account_box_rounded,
-          keyboardType: TextInputType.text,
-          onChanged: (_) => setState(() => _errorMessage = null),
-        ),
-        const SizedBox(height: 14),
-        GlassInput(
-          label: 'Pixel ID (Optional)',
-          hint: 'e.g. 987654321',
-          controller: _metaPixelCtrl,
-          prefixIcon: Icons.data_object_rounded,
-          keyboardType: TextInputType.number,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildConfigRow(String label, String value) {
+  Widget _configRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -1085,11 +653,7 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
           Expanded(
             child: Text(
               value,
-              style: TextStyle(
-                color: C.textSecondary,
-                fontSize: 10,
-                fontFamily: value.startsWith('http') ? 'monospace' : null,
-              ),
+              style: const TextStyle(color: C.textSecondary, fontSize: 11),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -1101,153 +665,43 @@ class _ConnectMetaScreenState extends State<ConnectMetaScreen>
   Widget _buildHelpSection() {
     return GlassCard(
       padding: const EdgeInsets.all(16),
-      child: Column(
+      child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.help_outline_rounded, color: C.primary, size: 20),
-              const SizedBox(width: 10),
+              Icon(Icons.info_outline_rounded, color: C.primary, size: 18),
+              SizedBox(width: 10),
               Text(
-                _mode == ConnectionMode.worker
-                    ? 'How to get API Key?'
-                    : 'Where to find these?',
-                style: const TextStyle(
+                'How to connect',
+                style: TextStyle(
                   color: C.primary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          if (_mode == ConnectionMode.worker) ...[
-            _buildHelpStep(
-              '1',
-              'Contact your admin',
-              'Get the API_SECRET_KEY from system administrator',
-            ),
-            _buildHelpStep(
-              '2',
-              'Paste it above',
-              'Enter the key in the API Secret Key field',
-            ),
-            _buildHelpStep(
-              '3',
-              'Connect',
-              'Tap Connect to Worker button to authenticate',
-            ),
-          ] else ...[
-            _buildHelpStep(
-              '1',
-              'Meta Business Suite',
-              'Go to Meta Business Suite → Settings',
-            ),
-            _buildHelpStep(
-              '2',
-              'System User',
-              'Create System User with ads_management permission',
-            ),
-            _buildHelpStep(
-              '3',
-              'Ad Account',
-              'Copy Ad Account ID from Ad Account Settings',
-            ),
-            _buildHelpStep(
-              '4',
-              'Pixel (Optional)',
-              'Find Pixel ID in Events Manager',
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHelpStep(String num, String title, String description) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: const BoxDecoration(
-              gradient: C.primaryGrad,
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                num,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: C.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: const TextStyle(
-                    color: C.textSecondary,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
+          SizedBox(height: 12),
+          Text(
+            '1) Get API_SECRET_KEY from admin\n'
+            '2) Enter it here\n'
+            '3) Tap Connect\n\n'
+            'Meta tokens remain on Worker (secure).',
+            style: TextStyle(
+              color: C.textSecondary,
+              fontSize: 12,
+              height: 1.35,
             ),
           ),
         ],
       ),
     );
   }
-
-  bool _canConnect() {
-    if (_connected) return true;
-
-    if (_mode == ConnectionMode.worker) {
-      return _workerApiKeyCtrl.text.trim().isNotEmpty;
-    } else {
-      return _metaTokenCtrl.text.trim().isNotEmpty &&
-          _metaAccountCtrl.text.trim().isNotEmpty;
-    }
-  }
 }
 
-enum ConnectionMode {
-  worker,
-  directMeta,
-}
+class _ConnectionResult {
+  final String workerUrl;
 
-class ConnectionResult {
-  final ConnectionMode mode;
-  final String? workerUrl;
-  final String? metaAccountId;
-  final String? metaAccountName;
-  final String? metaPixelId;
-  final int? campaignCount;
-
-  ConnectionResult({
-    required this.mode,
-    this.workerUrl,
-    this.metaAccountId,
-    this.metaAccountName,
-    this.metaPixelId,
-    this.campaignCount,
-  });
+  _ConnectionResult({required this.workerUrl});
 }

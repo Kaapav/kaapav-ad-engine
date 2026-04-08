@@ -3,8 +3,8 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-workers_dev = true         
-preview_urls = false       
+workers_dev = true
+preview_urls = false
 
 [vars]
 ENVIRONMENT = "production"
@@ -25,4 +25,4 @@ binding = "SESSIONS"
 id = "fc1aff42a40d4b728fbb0dc2b9fc2df3"
 
 [triggers]
-crons = ["0 */6 * * *", "0 8 * * *", "0 */2 * * *"]
+crons = ["0 */6 * * *", "30 2 * * *", "0 */2 * * *"]

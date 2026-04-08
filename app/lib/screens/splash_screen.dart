@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
 import '../core/theme.dart';
 import '../services/biometric_service.dart';
-import 'main_shell.dart';
+import '../services/meta_auth.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -44,30 +48,21 @@ class _SplashScreenState extends State<SplashScreen>
       curve: Curves.easeOutCubic,
     );
 
-    _scale = Tween<double>(
-      begin: 0.82,
-      end: 1.0,
-    ).animate(
+    _scale = Tween<double>(begin: 0.82, end: 1.0).animate(
       CurvedAnimation(
         parent: _introC,
         curve: Curves.easeOutBack,
       ),
     );
 
-    _logoFloat = Tween<double>(
-      begin: 8,
-      end: 0,
-    ).animate(
+    _logoFloat = Tween<double>(begin: 8, end: 0).animate(
       CurvedAnimation(
         parent: _introC,
         curve: Curves.easeOutCubic,
       ),
     );
 
-    _glowPulse = Tween<double>(
-      begin: 0.92,
-      end: 1.08,
-    ).animate(
+    _glowPulse = Tween<double>(begin: 0.92, end: 1.08).animate(
       CurvedAnimation(
         parent: _pulseC,
         curve: Curves.easeInOut,
@@ -77,7 +72,24 @@ class _SplashScreenState extends State<SplashScreen>
     _introC.forward();
     _pulseC.repeat(reverse: true);
 
-    _startFlow();
+    // ✅ start after first frame (fixes "biometric not showing" on some devices)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startFlow();
+    });
+  }
+
+  Future<String> _decideNextRoute() async {
+    final auth = MetaAuth();
+
+    final onboarded = await auth.isOnboarded();
+    if (!onboarded) return '/onboarding';
+
+    final hasApiKey = await auth.hasApiKey();
+    final session = await auth.getSessionToken();
+    final hasSession = session != null && session.trim().isNotEmpty;
+
+    if (hasApiKey || hasSession) return '/dashboard';
+    return '/connect';
   }
 
   Future<void> _startFlow() async {
@@ -91,20 +103,21 @@ class _SplashScreenState extends State<SplashScreen>
       });
     }
 
-    await Future.delayed(const Duration(milliseconds: 1900));
+    // let intro animation play a bit
+    await Future.delayed(const Duration(milliseconds: 1200));
     if (!mounted || _navigated) {
       _isAuthenticating = false;
       return;
     }
 
     if (mounted) {
-      setState(() {
-        _checkingBiometric = true;
-      });
+      setState(() => _checkingBiometric = true);
     }
 
     try {
-      final biometricAvailable = await BiometricService.isAvailable();
+      // ✅ timeouts prevent permanent freeze
+      final biometricAvailable = await BiometricService.isAvailable()
+          .timeout(const Duration(seconds: 3), onTimeout: () => false);
 
       if (!mounted || _navigated) {
         _isAuthenticating = false;
@@ -112,7 +125,8 @@ class _SplashScreenState extends State<SplashScreen>
       }
 
       if (biometricAvailable) {
-        final authenticated = await BiometricService.authenticate();
+        final authenticated = await BiometricService.authenticate()
+            .timeout(const Duration(seconds: 12), onTimeout: () => false);
 
         if (!mounted || _navigated) {
           _isAuthenticating = false;
@@ -129,7 +143,8 @@ class _SplashScreenState extends State<SplashScreen>
         }
       }
 
-      await _goToHome();
+      final route = await _decideNextRoute();
+      _go(route);
     } catch (_) {
       if (!mounted || _navigated) {
         _isAuthenticating = false;
@@ -145,50 +160,21 @@ class _SplashScreenState extends State<SplashScreen>
     }
   }
 
-  Future<void> _goToHome() async {
+  void _go(String route) {
     if (!mounted || _navigated) return;
-
     _navigated = true;
-
-    await Future.delayed(const Duration(milliseconds: 180));
-    if (!mounted) return;
-
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 550),
-        reverseTransitionDuration: const Duration(milliseconds: 350),
-        pageBuilder: (_, __, ___) => const MainShell(),
-        transitionsBuilder: (_, animation, __, child) {
-          final fade = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-          );
-
-          final slide = Tween<Offset>(
-            begin: const Offset(0, 0.02),
-            end: Offset.zero,
-          ).animate(
-            CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            ),
-          );
-
-          return FadeTransition(
-            opacity: fade,
-            child: SlideTransition(
-              position: slide,
-              child: child,
-            ),
-          );
-        },
-      ),
-    );
+    context.go(route);
   }
 
   Future<void> _retry() async {
     if (_isAuthenticating || _navigated) return;
     await _startFlow();
+  }
+
+  Future<void> _continueAnyway() async {
+    if (_navigated) return;
+    final route = await _decideNextRoute();
+    _go(route);
   }
 
   @override
@@ -269,7 +255,7 @@ class _SplashScreenState extends State<SplashScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           const Text(
-            'Biometric authentication failed',
+            'Authentication failed',
             style: TextStyle(
               color: C.error,
               fontSize: 13,
@@ -277,19 +263,27 @@ class _SplashScreenState extends State<SplashScreen>
             ),
           ),
           const SizedBox(height: 12),
-          TextButton(
-            onPressed: _retry,
-            style: TextButton.styleFrom(
-              foregroundColor: C.primary,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            ),
-            child: const Text(
-              'Retry',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                onPressed: _retry,
+                style: TextButton.styleFrom(foregroundColor: C.primary),
+                child: const Text(
+                  'Retry',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
               ),
-            ),
+              const SizedBox(width: 10),
+              TextButton(
+                onPressed: _continueAnyway,
+                style: TextButton.styleFrom(foregroundColor: C.textSecondary),
+                child: const Text(
+                  'Continue',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
           ),
         ],
       );
@@ -336,7 +330,6 @@ class _SplashScreenState extends State<SplashScreen>
 
 class _LogoHero extends StatelessWidget {
   const _LogoHero({required this.glowPulse});
-
   final double glowPulse;
 
   @override
@@ -438,7 +431,6 @@ class _LogoHero extends StatelessWidget {
 
 class _AnimatedBackground extends StatelessWidget {
   const _AnimatedBackground({required this.glowPulse});
-
   final Animation<double> glowPulse;
 
   @override

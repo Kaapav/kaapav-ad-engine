@@ -30,7 +30,7 @@ class WorkerApiService {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
         },
-        validateStatus: (status) => status != null && status < 500,
+        validateStatus: (status) => status != null && status < 400,
       ),
     );
 
@@ -173,8 +173,8 @@ Never _throwDioError(
     await _auth.deleteApiKey();
   }
 
-  Future<bool> isConfigured() async {
-  return _auth.hasApiKey();
+Future<bool> isConfigured() async {
+  return (await _auth.hasApiKey()) || (await _auth.hasSessionToken());
 }
   // ══════════════════════════════════════════════════════════════
   // Campaigns
@@ -767,11 +767,11 @@ class _WorkerInterceptor extends Interceptor {
     debugPrint('API KEY: $apiKey');
     debugPrint('SESSION TOKEN: $sessionToken');
 
-    if (apiKey != null && apiKey.trim().isNotEmpty) {
-      options.headers['X-API-Key'] = apiKey.trim();
-    } else if (sessionToken != null && sessionToken.trim().isNotEmpty) {
-      options.headers['Authorization'] = 'Bearer ${sessionToken.trim()}';
-    }
+if (sessionToken != null && sessionToken.trim().isNotEmpty) {
+  options.headers['Authorization'] = 'Bearer ${sessionToken.trim()}';
+} else if (apiKey != null && apiKey.trim().isNotEmpty) {
+  options.headers['X-API-Key'] = apiKey.trim();
+}
 
     handler.next(options);
   }

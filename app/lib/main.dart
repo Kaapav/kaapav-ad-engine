@@ -34,50 +34,55 @@ Future<void> main() async {
 
   await LocalStorageService.init();
 
+  // Init local notifications (doesn't require Firebase)
+  final notificationService = NotificationService();
+  await notificationService.init();
+
+  bool firebaseReady = false;
+
   try {
     await Firebase.initializeApp();
+    firebaseReady = true;
     debugPrint('✅ Firebase initialized');
   } catch (e) {
     debugPrint('⚠️ Firebase initialization failed: $e');
   }
 
-  try {
-    FirebaseMessaging.onBackgroundMessage(
-      _firebaseMessagingBackgroundHandler,
-    );
+  if (firebaseReady) {
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    final messaging = FirebaseMessaging.instance;
-    final settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      announcement: false,
-      carPlay: false,
-      criticalAlert: false,
-      provisional: false,
-    );
+    final fcmService = FCMService();
+    await fcmService.init();
 
-    debugPrint('📱 FCM Permission: ${settings.authorizationStatus}');
+    try {
+      final messaging = FirebaseMessaging.instance;
 
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      final token = await messaging.getToken();
-      if (token != null) {
-        debugPrint('📲 FCM Token: ${token.substring(0, 20)}...');
-        await LocalStorageService.saveSetting('fcm_token', token);
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      debugPrint('📱 FCM Permission: ${settings.authorizationStatus}');
+
+      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        final token = await messaging.getToken();
+        if (token != null && token.trim().isNotEmpty) {
+          await LocalStorageService.saveSetting('fcm_token', token);
+          await fcmService.registerDevice(token); // register initial token
+        }
+
+        messaging.onTokenRefresh.listen((newToken) async {
+          await LocalStorageService.saveSetting('fcm_token', newToken);
+          await fcmService.registerDevice(newToken);
+        });
       }
-
-      messaging.onTokenRefresh.listen((newToken) async {
-        debugPrint('🔄 FCM Token refreshed');
-        await LocalStorageService.saveSetting('fcm_token', newToken);
-        await FCMService().registerDevice(newToken);
-      });
+    } catch (e) {
+      debugPrint('⚠️ FCM setup failed: $e');
     }
-  } catch (e) {
-    debugPrint('⚠️ FCM setup failed: $e');
+  } else {
+    debugPrint('⚠️ Firebase not ready -> FCM disabled for this run');
   }
-
-  await NotificationService().init();
-  await FCMService().init();
 
   runApp(
     const ProviderScope(

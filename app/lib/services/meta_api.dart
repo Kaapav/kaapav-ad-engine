@@ -1,46 +1,105 @@
 import 'package:dio/dio.dart';
+
 import '../core/constants.dart';
+import '../core/env_config.dart';
+import '../services/meta_auth.dart';
 
 class MetaApiService {
-  late final Dio _dio;
+  late final Dio _workerDio;
+  late final Dio _metaDio;
 
-  // Set these from .env / secure storage in production
+  // Direct Meta fallback (legacy / transitional)
   String accessToken = '';
   String adAccountId = '';
   String pixelId = '';
 
   MetaApiService() {
-    _dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 15),
-      headers: {'Content-Type': 'application/json'},
-    ));
-    _dio.interceptors.add(_MetaInterceptor(this));
+    _workerDio = Dio(
+      BaseOptions(
+        baseUrl: EnvConfig.workerBaseUrl,
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+        headers: {'Content-Type': 'application/json'},
+      ),
+    );
+
+    _metaDio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+        headers: {'Content-Type': 'application/json'},
+      ),
+    )..interceptors.add(_MetaInterceptor(this));
   }
 
-  void configure({required String token, required String accountId, String? pixel}) {
+  /// Legacy configure (direct Meta).
+  /// Worker-first rule: if Worker auth exists, Worker will be used anyway.
+  void configure({
+    required String token,
+    required String accountId,
+    String? pixel,
+  }) {
     accessToken = token;
     adAccountId = accountId;
     if (pixel != null) pixelId = pixel;
   }
 
+  Future<Map<String, String>> _workerHeaders() async {
+    final auth = MetaAuth();
+    final apiKey = await auth.getApiKey();
+    final session = await auth.getSessionToken();
+
+    if (apiKey != null && apiKey.trim().isNotEmpty) {
+      return {'X-API-Key': apiKey.trim()};
+    }
+    if (session != null && session.trim().isNotEmpty) {
+      return {'Authorization': 'Bearer ${session.trim()}'};
+    }
+    return {};
+  }
+
+  Future<bool> _hasWorkerAuth() async {
+    final h = await _workerHeaders();
+    return h.isNotEmpty;
+  }
+
   // ═══════════════════════════════════════════════════════════
-  // CAMPAIGNS
+  // CAMPAIGNS (Worker-first)
   // ═══════════════════════════════════════════════════════════
+
   Future<Map<String, dynamic>> getCampaigns({
     String datePreset = 'last_30d',
     int limit = 50,
   }) async {
-    final res = await _dio.get(
+    // Worker-first
+    if (await _hasWorkerAuth()) {
+      final res = await _workerDio.get(
+        '/api/campaigns',
+        queryParameters: {
+          'date_preset': datePreset,
+          'limit': limit,
+        },
+        options: Options(headers: await _workerHeaders()),
+      );
+      return (res.data as Map).cast<String, dynamic>();
+    }
+
+    // Fallback: direct Meta only if configured
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Worker not connected and direct Meta not configured.');
+    }
+
+    final res = await _metaDio.get(
       K.campaigns(adAccountId),
       queryParameters: {
         'access_token': accessToken,
-        'fields': 'name,objective,status,daily_budget,lifetime_budget,bid_strategy,start_time,stop_time,updated_time',
+        'fields':
+            'name,objective,status,daily_budget,lifetime_budget,bid_strategy,start_time,stop_time,updated_time',
         'limit': limit,
         'date_preset': datePreset,
       },
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
   Future<Map<String, dynamic>> getCampaignInsights(
@@ -48,6 +107,22 @@ class MetaApiService {
     String datePreset = 'last_30d',
     String? timeIncrement,
   }) async {
+    if (await _hasWorkerAuth()) {
+      final res = await _workerDio.get(
+        '/api/campaigns/$campaignId/insights',
+        queryParameters: {
+          'date_preset': datePreset,
+          if (timeIncrement != null) 'time_increment': timeIncrement,
+        },
+        options: Options(headers: await _workerHeaders()),
+      );
+      return (res.data as Map).cast<String, dynamic>();
+    }
+
+    if (accessToken.isEmpty) {
+      throw Exception('Worker not connected and direct Meta not configured.');
+    }
+
     final params = <String, dynamic>{
       'access_token': accessToken,
       'fields': K.insightFields.join(','),
@@ -55,14 +130,30 @@ class MetaApiService {
     };
     if (timeIncrement != null) params['time_increment'] = timeIncrement;
 
-    final res = await _dio.get(K.campaignInsights(campaignId), queryParameters: params);
-    return res.data;
+    final res =
+        await _metaDio.get(K.campaignInsights(campaignId), queryParameters: params);
+    return (res.data as Map).cast<String, dynamic>();
   }
 
   Future<Map<String, dynamic>> getAccountInsights({
     String datePreset = 'last_30d',
     String? timeIncrement,
   }) async {
+    if (await _hasWorkerAuth()) {
+      // Worker has /api/analytics/summary and /api/analytics/daily
+      final path = (timeIncrement == '1') ? '/api/analytics/daily' : '/api/analytics/summary';
+      final res = await _workerDio.get(
+        path,
+        queryParameters: {'date_preset': datePreset},
+        options: Options(headers: await _workerHeaders()),
+      );
+      return (res.data as Map).cast<String, dynamic>();
+    }
+
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Worker not connected and direct Meta not configured.');
+    }
+
     final params = <String, dynamic>{
       'access_token': accessToken,
       'fields': K.insightFields.join(','),
@@ -70,33 +161,73 @@ class MetaApiService {
     };
     if (timeIncrement != null) params['time_increment'] = timeIncrement;
 
-    final res = await _dio.get(K.insights(adAccountId), queryParameters: params);
-    return res.data;
+    final res = await _metaDio.get(K.insights(adAccountId), queryParameters: params);
+    return (res.data as Map).cast<String, dynamic>();
   }
 
   // ═══════════════════════════════════════════════════════════
-  // CAMPAIGN ACTIONS
+  // CAMPAIGN ACTIONS (Worker-first)
   // ═══════════════════════════════════════════════════════════
-  Future<Map<String, dynamic>> updateCampaignStatus(String campaignId, String status) async {
-    final res = await _dio.post(
+
+  Future<Map<String, dynamic>> updateCampaignStatus(
+    String campaignId,
+    String status,
+  ) async {
+    if (await _hasWorkerAuth()) {
+      final res = await _workerDio.patch(
+        '/api/campaigns/$campaignId',
+        data: {'status': status},
+        options: Options(headers: await _workerHeaders()),
+      );
+      return (res.data as Map).cast<String, dynamic>();
+    }
+
+    if (accessToken.isEmpty) {
+      throw Exception('Worker not connected and direct Meta not configured.');
+    }
+
+    final res = await _metaDio.post(
       K.campaign(campaignId),
       queryParameters: {'access_token': accessToken},
       data: {'status': status},
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
-  Future<Map<String, dynamic>> updateCampaignBudget(String campaignId, {double? dailyBudget, double? lifetimeBudget}) async {
-    final data = <String, dynamic>{};
-    if (dailyBudget != null) data['daily_budget'] = (dailyBudget * 100).toInt(); // Meta uses cents
-    if (lifetimeBudget != null) data['lifetime_budget'] = (lifetimeBudget * 100).toInt();
+  Future<Map<String, dynamic>> updateCampaignBudget(
+    String campaignId, {
+    double? dailyBudget,
+    double? lifetimeBudget,
+  }) async {
+    if (await _hasWorkerAuth()) {
+      final data = <String, dynamic>{};
+      if (dailyBudget != null) data['daily_budget'] = dailyBudget;
+      if (lifetimeBudget != null) data['lifetime_budget'] = lifetimeBudget;
 
-    final res = await _dio.post(
+      final res = await _workerDio.patch(
+        '/api/campaigns/$campaignId',
+        data: data,
+        options: Options(headers: await _workerHeaders()),
+      );
+      return (res.data as Map).cast<String, dynamic>();
+    }
+
+    if (accessToken.isEmpty) {
+      throw Exception('Worker not connected and direct Meta not configured.');
+    }
+
+    final data = <String, dynamic>{};
+    if (dailyBudget != null) data['daily_budget'] = (dailyBudget * 100).toInt();
+    if (lifetimeBudget != null) {
+      data['lifetime_budget'] = (lifetimeBudget * 100).toInt();
+    }
+
+    final res = await _metaDio.post(
       K.campaign(campaignId),
       queryParameters: {'access_token': accessToken},
       data: data,
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
   Future<Map<String, dynamic>> createCampaign({
@@ -108,6 +239,28 @@ class MetaApiService {
     double? lifetimeBudget,
     Map<String, dynamic>? specialAdCategories,
   }) async {
+    if (await _hasWorkerAuth()) {
+      final res = await _workerDio.post(
+        '/api/campaigns',
+        data: {
+          'name': name,
+          'objective': objective,
+          'status': status,
+          if (bidStrategy != null) 'bid_strategy': bidStrategy,
+          if (dailyBudget != null) 'daily_budget': dailyBudget,
+          if (lifetimeBudget != null) 'lifetime_budget': lifetimeBudget,
+          if (specialAdCategories != null)
+            'special_ad_categories': specialAdCategories,
+        },
+        options: Options(headers: await _workerHeaders()),
+      );
+      return (res.data as Map).cast<String, dynamic>();
+    }
+
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Worker not connected and direct Meta not configured.');
+    }
+
     final data = <String, dynamic>{
       'name': name,
       'objective': objective,
@@ -116,29 +269,36 @@ class MetaApiService {
     };
     if (bidStrategy != null) data['bid_strategy'] = bidStrategy;
     if (dailyBudget != null) data['daily_budget'] = (dailyBudget * 100).toInt();
-    if (lifetimeBudget != null) data['lifetime_budget'] = (lifetimeBudget * 100).toInt();
+    if (lifetimeBudget != null) {
+      data['lifetime_budget'] = (lifetimeBudget * 100).toInt();
+    }
 
-    final res = await _dio.post(
+    final res = await _metaDio.post(
       K.campaigns(adAccountId),
       queryParameters: {'access_token': accessToken},
       data: data,
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
   // ═══════════════════════════════════════════════════════════
-  // AD SETS
+  // The below remain direct Meta until Worker routes exist
   // ═══════════════════════════════════════════════════════════
+
   Future<Map<String, dynamic>> getAdSets({int limit = 50}) async {
-    final res = await _dio.get(
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Direct Meta not configured for ad sets.');
+    }
+    final res = await _metaDio.get(
       K.adsets(adAccountId),
       queryParameters: {
         'access_token': accessToken,
-        'fields': 'name,status,targeting,daily_budget,lifetime_budget,bid_amount,optimization_goal,campaign_id',
+        'fields':
+            'name,status,targeting,daily_budget,lifetime_budget,bid_amount,optimization_goal,campaign_id',
         'limit': limit,
       },
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
   Future<Map<String, dynamic>> createAdSet({
@@ -150,6 +310,10 @@ class MetaApiService {
     String? billingEvent,
     String? status,
   }) async {
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Direct Meta not configured for ad set creation.');
+    }
+
     final data = <String, dynamic>{
       'campaign_id': campaignId,
       'name': name,
@@ -160,19 +324,20 @@ class MetaApiService {
     };
     if (dailyBudget != null) data['daily_budget'] = (dailyBudget * 100).toInt();
 
-    final res = await _dio.post(
+    final res = await _metaDio.post(
       K.adsets(adAccountId),
       queryParameters: {'access_token': accessToken},
       data: data,
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // AUDIENCES
-  // ═══════════════════════════════════════════════════════════
   Future<Map<String, dynamic>> getCustomAudiences({int limit = 50}) async {
-    final res = await _dio.get(
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Direct Meta not configured for audiences.');
+    }
+
+    final res = await _metaDio.get(
       K.audiences(adAccountId),
       queryParameters: {
         'access_token': accessToken,
@@ -180,18 +345,35 @@ class MetaApiService {
         'limit': limit,
       },
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // CONVERSIONS API (SERVER-SIDE EVENTS)
-  // ═══════════════════════════════════════════════════════════
+  Future<Map<String, dynamic>> getAds({int limit = 50}) async {
+    if (accessToken.isEmpty || adAccountId.isEmpty) {
+      throw Exception('Direct Meta not configured for ads.');
+    }
+
+    final res = await _metaDio.get(
+      K.ads(adAccountId),
+      queryParameters: {
+        'access_token': accessToken,
+        'fields': 'name,status,creative,adset_id,campaign_id',
+        'limit': limit,
+      },
+    );
+    return (res.data as Map).cast<String, dynamic>();
+  }
+
   Future<Map<String, dynamic>> sendConversionEvent({
     required String eventName,
     required Map<String, dynamic> userData,
     Map<String, dynamic>? customData,
     String? eventSourceUrl,
   }) async {
+    if (accessToken.isEmpty || pixelId.isEmpty) {
+      throw Exception('Direct Meta not configured for Conversions API.');
+    }
+
     final event = <String, dynamic>{
       'event_name': eventName,
       'event_time': DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -201,34 +383,18 @@ class MetaApiService {
     if (customData != null) event['custom_data'] = customData;
     if (eventSourceUrl != null) event['event_source_url'] = eventSourceUrl;
 
-    final res = await _dio.post(
+    final res = await _metaDio.post(
       K.conversionsApi(pixelId),
       queryParameters: {'access_token': accessToken},
       data: {'data': [event]},
     );
-    return res.data;
+    return (res.data as Map).cast<String, dynamic>();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // HELPERS
-  // ═══════════════════════════════════════════════════════════
-  Future<Map<String, dynamic>> getAds({int limit = 50}) async {
-    final res = await _dio.get(
-      K.ads(adAccountId),
-      queryParameters: {
-        'access_token': accessToken,
-        'fields': 'name,status,creative,adset_id,campaign_id',
-        'limit': limit,
-      },
-    );
-    return res.data;
-  }
-
-  // Build targeting spec for Meta API
   static Map<String, dynamic> buildTargeting({
     int ageMin = 18,
     int ageMax = 65,
-    List<int>? genders, // 1=male, 2=female
+    List<int>? genders,
     List<Map<String, dynamic>>? geoLocations,
     List<Map<String, dynamic>>? interests,
     List<Map<String, dynamic>>? behaviors,
@@ -240,26 +406,40 @@ class MetaApiService {
       'age_max': ageMax,
     };
     if (genders != null) targeting['genders'] = genders;
-    if (geoLocations != null) targeting['geo_locations'] = {'cities': geoLocations};
-    if (interests != null) targeting['flexible_spec'] = [{'interests': interests}];
-    if (behaviors != null) targeting['flexible_spec'] = [...(targeting['flexible_spec'] ?? []), {'behaviors': behaviors}];
-    if (customAudiences != null) targeting['custom_audiences'] = customAudiences.map((id) => {'id': id}).toList();
-    if (excludedAudiences != null) targeting['excluded_custom_audiences'] = excludedAudiences.map((id) => {'id': id}).toList();
+if (geoLocations != null) {
+  targeting['geo_locations'] = {'cities': geoLocations};
+}
+
+if (interests != null) {
+  targeting['flexible_spec'] = [
+    {'interests': interests}
+  ];
+}
+    if (behaviors != null) {
+      targeting['flexible_spec'] = [
+        ...(targeting['flexible_spec'] ?? []),
+        {'behaviors': behaviors}
+      ];
+    }
+    if (customAudiences != null) {
+      targeting['custom_audiences'] = customAudiences.map((id) => {'id': id}).toList();
+    }
+    if (excludedAudiences != null) {
+      targeting['excluded_custom_audiences'] =
+          excludedAudiences.map((id) => {'id': id}).toList();
+    }
     return targeting;
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// DIO INTERCEPTOR — LOGGING + ERROR HANDLING
-// ═══════════════════════════════════════════════════════════
 class _MetaInterceptor extends Interceptor {
   final MetaApiService _service;
   _MetaInterceptor(this._service);
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    // Add token if missing
-    if (!options.queryParameters.containsKey('access_token') && _service.accessToken.isNotEmpty) {
+    if (!options.queryParameters.containsKey('access_token') &&
+        _service.accessToken.isNotEmpty) {
       options.queryParameters['access_token'] = _service.accessToken;
     }
     handler.next(options);
@@ -267,28 +447,19 @@ class _MetaInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    // Parse Meta API errors
     final data = err.response?.data;
     if (data is Map && data.containsKey('error')) {
       final metaError = data['error'];
       final code = metaError['code'];
       final message = metaError['message'] ?? 'Unknown Meta API error';
 
-      // Handle token expiry
-      if (code == 190) {
-        // Token expired — trigger refresh flow
-      }
-
-      // Handle rate limiting
-      if (code == 32 || code == 4) {
-        // Rate limited — back off
-      }
-
-      handler.next(DioException(
-        requestOptions: err.requestOptions,
-        response: err.response,
-        message: 'Meta API Error ($code): $message',
-      ));
+      handler.next(
+        DioException(
+          requestOptions: err.requestOptions,
+          response: err.response,
+          message: 'Meta API Error ($code): $message',
+        ),
+      );
       return;
     }
     handler.next(err);

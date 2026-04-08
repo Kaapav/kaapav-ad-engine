@@ -25,13 +25,13 @@ final workerApiProvider = Provider<WorkerApiService>((ref) {
 final metaAuthProvider = Provider<MetaAuth>((ref) => MetaAuth());
 
 // ══════════════════════════════════════════════════════════════
-// DATE PRESET
+// DATE PRESET (global shared state)
 // ══════════════════════════════════════════════════════════════
 
 final datePresetProvider = StateProvider<String>((ref) => 'last_30d');
 
 // ══════════════════════════════════════════════════════════════
-// DASHBOARD / ANALYTICS PROVIDERS
+// DASHBOARD / ANALYTICS PROVIDERS (Worker-first)
 // ══════════════════════════════════════════════════════════════
 
 final dashboardSummaryProvider =
@@ -46,10 +46,19 @@ final dashboardDailyProvider =
   return api.getAnalyticsDaily(datePreset: datePreset);
 });
 
+bool _isReadFlag(dynamic v) {
+  // Worker/D1 typically returns 0/1 (int), sometimes bool.
+  if (v == null) return false;
+  if (v is bool) return v;
+  if (v is num) return v.toInt() == 1;
+  final s = v.toString().trim().toLowerCase();
+  return s == '1' || s == 'true' || s == 'yes';
+}
+
 final notificationsCountProvider = FutureProvider<int>((ref) async {
   final api = ref.watch(workerApiProvider);
   final notifications = await api.getNotifications(limit: 50);
-  return notifications.where((n) => n['read'] != true).length;
+  return notifications.where((n) => !_isReadFlag(n['read'])).length;
 });
 
 final crmStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
@@ -58,7 +67,7 @@ final crmStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
 });
 
 // ══════════════════════════════════════════════════════════════
-// CAMPAIGNS
+// CAMPAIGNS (Worker-first)
 // ══════════════════════════════════════════════════════════════
 
 final campaignsProvider =
@@ -110,13 +119,10 @@ class CampaignsNotifier extends StateNotifier<AsyncValue<List<Campaign>>> {
     final current = state.valueOrNull;
     if (current == null) return;
 
-    Campaign? campaign;
-    for (final c in current) {
-      if (c.id == id) {
-        campaign = c;
-        break;
-      }
-    }
+    final campaign = current.cast<Campaign?>().firstWhere(
+          (c) => c?.id == id,
+          orElse: () => null,
+        );
     if (campaign == null) return;
 
     final newStatus = campaign.isActive ? 'PAUSED' : 'ACTIVE';
@@ -159,7 +165,7 @@ class CampaignsNotifier extends StateNotifier<AsyncValue<List<Campaign>>> {
 }
 
 // ══════════════════════════════════════════════════════════════
-// LEADS
+// LEADS (Worker-first)
 // ══════════════════════════════════════════════════════════════
 
 final leadsProvider =
@@ -171,23 +177,12 @@ final leadsProvider =
 class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
   final WorkerApiService _api;
 
+  // keep for offline fallback later
+  // ignore: unused_field
   List<Lead> _lastGoodData = const [];
 
   LeadsNotifier(this._api) : super(const AsyncValue.loading()) {
     load();
-  }
-
-  bool _isCancelledError(Object e) {
-    if (e is DioException) {
-      return e.type == DioExceptionType.cancel ||
-          (e.message?.toLowerCase().contains('cancel') ?? false);
-    }
-
-    final msg = e.toString().toLowerCase();
-    return msg.contains('request cancelled') ||
-        msg.contains('request canceled') ||
-        msg.contains('cancelled') ||
-        msg.contains('canceled');
   }
 
   Future<void> load({
@@ -196,15 +191,7 @@ class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
     int limit = 50,
     int offset = 0,
   }) async {
-    final previousData = state.maybeWhen(
-      data: (data) => data,
-      orElse: () => _lastGoodData,
-    );
-
-    if (previousData.isEmpty) {
-      state = const AsyncValue.loading();
-    }
-
+    state = const AsyncValue.loading();
     try {
       final leads = await _api.getLeads(
         stage: stage,
@@ -212,18 +199,15 @@ class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
         limit: limit,
         offset: offset,
       );
-
       _lastGoodData = leads;
       state = AsyncValue.data(leads);
     } catch (e, st) {
-      if (_isCancelledError(e)) {
-        if (previousData.isNotEmpty) {
-          state = AsyncValue.data(previousData);
-        }
-        return;
+      final configured = await _api.isConfigured();
+      if (!configured) {
+        state = const AsyncValue.data([]);
+      } else {
+        state = AsyncValue.error(e, st);
       }
-
-      state = AsyncValue.error(e, st);
     }
   }
 
@@ -233,11 +217,6 @@ class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
     int limit = 50,
     int offset = 0,
   }) async {
-    final previousData = state.maybeWhen(
-      data: (data) => data,
-      orElse: () => _lastGoodData,
-    );
-
     try {
       final leads = await _api.getLeads(
         stage: stage,
@@ -245,18 +224,15 @@ class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
         limit: limit,
         offset: offset,
       );
-
       _lastGoodData = leads;
       state = AsyncValue.data(leads);
     } catch (e, st) {
-      if (_isCancelledError(e)) {
-        if (previousData.isNotEmpty) {
-          state = AsyncValue.data(previousData);
-        }
-        return;
+      final configured = await _api.isConfigured();
+      if (!configured) {
+        state = const AsyncValue.data([]);
+      } else {
+        state = AsyncValue.error(e, st);
       }
-
-      state = AsyncValue.error(e, st);
     }
   }
 
@@ -326,7 +302,7 @@ class LeadsNotifier extends StateNotifier<AsyncValue<List<Lead>>> {
 }
 
 // ══════════════════════════════════════════════════════════════
-// RULES
+// RULES (Worker-first)
 // ══════════════════════════════════════════════════════════════
 
 final rulesProvider =
@@ -375,13 +351,10 @@ class RulesNotifier extends StateNotifier<AsyncValue<List<AutoRule>>> {
     final current = state.valueOrNull;
     if (current == null) return;
 
-    AutoRule? rule;
-    for (final r in current) {
-      if (r.id == id) {
-        rule = r;
-        break;
-      }
-    }
+    final rule = current.cast<AutoRule?>().firstWhere(
+          (r) => r?.id == id,
+          orElse: () => null,
+        );
     if (rule == null) return;
 
     final newEnabled = !rule.enabled;
@@ -445,7 +418,7 @@ class RulesNotifier extends StateNotifier<AsyncValue<List<AutoRule>>> {
 }
 
 // ══════════════════════════════════════════════════════════════
-// NOTIFICATIONS
+// NOTIFICATIONS (Worker-first)
 // ══════════════════════════════════════════════════════════════
 
 final notificationsProvider = StateNotifierProvider<
@@ -487,7 +460,7 @@ class NotificationsNotifier
     final optimistic = current.map((n) {
       return {
         ...n,
-        'read': true,
+        'read': 1,
       };
     }).toList();
 
@@ -509,7 +482,7 @@ class NotificationsNotifier
       if (n['id']?.toString() == id) {
         return {
           ...n,
-          'read': true,
+          'read': 1,
         };
       }
       return n;
@@ -520,7 +493,7 @@ class NotificationsNotifier
 }
 
 // ══════════════════════════════════════════════════════════════
-// SETTINGS
+// SETTINGS (Local)
 // ══════════════════════════════════════════════════════════════
 
 final settingsProvider =
@@ -542,7 +515,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
 
 // ══════════════════════════════════════════════════════════════
 // ACTIVITY LOG
-// Temporary local empty source until worker endpoint exists
+// NOTE: still local until Worker exposes /api/activity_log route
 // ══════════════════════════════════════════════════════════════
 
 final activityLogProvider =
@@ -576,14 +549,13 @@ final campaignDetailProvider =
   return api.getCampaign(id, datePreset: datePreset);
 });
 
-final leadDetailProvider =
-    FutureProvider.family<Lead, String>((ref, id) async {
+final leadDetailProvider = FutureProvider.family<Lead, String>((ref, id) async {
   final api = ref.watch(workerApiProvider);
   return api.getLead(id);
 });
 
 // ══════════════════════════════════════════════════════════════
-// CONNECTION STATUS
+// CONNECTION STATUS (Worker-first)
 // ══════════════════════════════════════════════════════════════
 
 final connectionStatusProvider =
@@ -592,6 +564,8 @@ final connectionStatusProvider =
 
   final apiKey = await auth.getApiKey();
   final sessionToken = await auth.getSessionToken();
+
+  // legacy/direct meta fields (still displayed for now)
   final accountId = await auth.getAccountId();
   final pixelId = await auth.getPixelId();
   final hasMetaAuth = await auth.hasValidConfig();
@@ -614,14 +588,15 @@ final connectionStatusProvider =
   } catch (_) {
     workerOnline = false;
   } finally {
-    dio.close();
+    dio.close(force: true);
   }
 
   final hasApiKey = apiKey != null && apiKey.trim().isNotEmpty;
-  final hasSessionToken =
-      sessionToken != null && sessionToken.trim().isNotEmpty;
+  final hasSessionToken = sessionToken != null && sessionToken.trim().isNotEmpty;
 
   final workerReady = workerOnline && (hasApiKey || hasSessionToken);
+
+  // connected is true if worker is ready OR (legacy) direct meta config exists
   final connected = workerReady || hasMetaAuth;
 
   final mode = workerReady

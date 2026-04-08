@@ -6,6 +6,7 @@ import 'dart:io';
 import 'worker_api.dart';
 import 'local_storage.dart';
 import 'notification_service.dart';
+import 'dart:convert';
 
 /// FCM Service — handles device registration, foreground messages
 class FCMService {
@@ -13,7 +14,7 @@ class FCMService {
   factory FCMService() => _instance;
   FCMService._internal();
 
-  final _messaging = FirebaseMessaging.instance;
+  FirebaseMessaging get _messaging => FirebaseMessaging.instance;
   bool _initialized = false;
 
   /// Initialize FCM listeners
@@ -72,7 +73,7 @@ class FCMService {
 NotificationService().showAlert(
   title: notification.title ?? 'Notification',
   body: notification.body ?? '',
-  payload: message.data.toString(),
+  payload: jsonEncode(message.data),
 );
     }
   }

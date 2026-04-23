@@ -1,99 +1,156 @@
 import 'package:flutter/material.dart';
-import 'package:kaapav_ad_engine/core/theme.dart';
+import '../core/theme.dart';
 
+/// Universal score badge with color banding
+/// Uses project color constants from C class
 class ScoreBadge extends StatelessWidget {
-  final double score; // 0-100
-  final String? label;
-  final double height;
+  final double score;     // 0–100
+  final double size;
+  final bool   showLabel;
 
   const ScoreBadge({
     super.key,
     required this.score,
-    this.label,
-    this.height = 28,
+    this.size      = 48,
+    this.showLabel = true,
   });
 
-  Color _bandColor(double s) {
-    if (s >= 80) return C.success;
-    if (s >= 65) return C.primary;
-    if (s >= 45) return C.warning;
+  Color get _color {
+    if (score >= 80) return C.success;
+    if (score >= 65) return C.primary;
+    if (score >= 45) return C.warning;
+    return C.error;
+  }
+
+  String get _label {
+    if (score >= 80) return 'Strong';
+    if (score >= 65) return 'Good';
+    if (score >= 45) return 'Watch';
+    return 'Weak';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width:  size,
+          height: size,
+          decoration: BoxDecoration(
+            color:        _color.withValues(alpha: 0.12),
+            shape:        BoxShape.circle,
+            border:       Border.all(
+              color: _color.withValues(alpha: 0.35),
+              width: 1.5,
+            ),
+          ),
+          child: Center(
+            child: Text(
+              score.toStringAsFixed(0),
+              style: TextStyle(
+                color:      _color,
+                fontSize:   size * 0.28,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ),
+        if (showLabel) ...[
+          const SizedBox(height: 4),
+          Text(
+            _label,
+            style: TextStyle(
+              color:      _color,
+              fontSize:   10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Horizontal score bar with animated fill
+class ScoreBar extends StatelessWidget {
+  final double score;   // 0–100
+  final double height;
+  final String? label;
+
+  const ScoreBar({
+    super.key,
+    required this.score,
+    this.height = 8,
+    this.label,
+  });
+
+  Color get _color {
+    if (score >= 80) return C.success;
+    if (score >= 65) return C.primary;
+    if (score >= 45) return C.warning;
     return C.error;
   }
 
   @override
   Widget build(BuildContext context) {
-    final s = score.clamp(0.0, 100.0).toDouble();
-    final band = _bandColor(s);
-
-    return Container(
-      height: height,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: C.glassWhite,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: band.withValues(alpha: 0.55), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: band.withValues(alpha: 0.18),
-            blurRadius: 16,
-            spreadRadius: 1,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (label != null) ...[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                label!,
+                style: const TextStyle(
+                  color:    C.textMuted,
+                  fontSize: 10,
+                ),
+              ),
+              Text(
+                '${score.toStringAsFixed(0)}/100',
+                style: TextStyle(
+                  color:      _color,
+                  fontSize:   10,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
           ),
+          const SizedBox(height: 6),
         ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: band, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            label == null
-                ? s.toStringAsFixed(0)
-                : '${label!} ${s.toStringAsFixed(0)}',
-            style: const TextStyle(
-              color: C.textPrimary,
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-              letterSpacing: 0.2,
+        TweenAnimationBuilder<double>(
+          tween:    Tween(begin: 0, end: (score / 100).clamp(0, 1)),
+          duration: const Duration(milliseconds: 600),
+          curve:    Curves.easeOutCubic,
+          builder:  (_, v, __) => ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: Stack(
+              children: [
+                Container(
+                  height: height,
+                  color:  C.glassWhite,
+                ),
+                FractionallySizedBox(
+                  widthFactor: v,
+                  child: Container(
+                    height: height,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          _color,
+                          _color.withValues(alpha: 0.55),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class StatusPill extends StatelessWidget {
-  final String text;
-  final Color color;
-
-  const StatusPill({
-    super.key,
-    required this.text,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.40), width: 1),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.w700,
-          fontSize: 11,
-          letterSpacing: 0.2,
         ),
-      ),
+      ],
     );
   }
 }

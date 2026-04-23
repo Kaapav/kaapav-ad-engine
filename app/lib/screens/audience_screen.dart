@@ -1,159 +1,45 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../core/theme.dart';
 import '../core/utils.dart';
-import '../widgets/glass_card.dart';
+import '../models/audience_score.dart';
+import '../models/creative_match.dart';
+import '../models/buyer_quality.dart';
+import '../providers/intelligence_provider.dart';
+import '../widgets/audience_score_tile.dart';
+import '../widgets/buyer_quality_tile.dart';
 import '../widgets/buttons.dart';
-import '../widgets/inputs.dart';
-import '../widgets/search_filter.dart';
-
-class _Audience {
-  final String id;
-  final String name;
-  final String type; // custom, lookalike, saved
-  final int size;
-  final String source;
-  final String status; // ready, processing, too_small
-  final DateTime createdAt;
-  final bool active;
-
-  _Audience({
-    required this.id,
-    required this.name,
-    required this.type,
-    required this.size,
-    required this.source,
-    required this.status,
-    required this.createdAt,
-    this.active = true,
-  });
-}
+import '../widgets/common.dart';
+import '../widgets/empty_state.dart';
+import '../widgets/glass_card.dart';
+import '../widgets/matrix_heatmap.dart';
+import '../widgets/score_badge.dart';
 
 class AudienceScreen extends ConsumerStatefulWidget {
   const AudienceScreen({super.key});
 
   @override
-  ConsumerState<AudienceScreen> createState() => _AudienceScreenState();
+  ConsumerState<AudienceScreen> createState() =>
+      _AudienceScreenState();
 }
 
 class _AudienceScreenState extends ConsumerState<AudienceScreen>
     with SingleTickerProviderStateMixin {
-  late AnimationController _bgC;
-  String _search = '';
-  String _typeFilter = 'All';
+  late final AnimationController _bgC;
 
-  final _audiences = <_Audience>[
-    _Audience(
-      id: 'aud001',
-      name: 'Website Purchasers 180D',
-      type: 'custom',
-      size: 14200,
-      source: 'Pixel',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 30)),
-    ),
-    _Audience(
-      id: 'aud002',
-      name: 'LAL 1% — All Purchasers',
-      type: 'lookalike',
-      size: 2800000,
-      source: 'Website Purchasers 180D',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 25)),
-    ),
-    _Audience(
-      id: 'aud003',
-      name: 'Engaged Shoppers — Jewellery',
-      type: 'saved',
-      size: 890000,
-      source: 'Interest Targeting',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 45)),
-    ),
-    _Audience(
-      id: 'aud004',
-      name: 'LAL 2% — Add to Cart',
-      type: 'lookalike',
-      size: 5600000,
-      source: 'Add to Cart 90D',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 15)),
-    ),
-    _Audience(
-      id: 'aud005',
-      name: 'IG Engagers 90D',
-      type: 'custom',
-      size: 42500,
-      source: 'Instagram Page',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 20)),
-    ),
-    _Audience(
-      id: 'aud006',
-      name: 'Video Viewers 75%',
-      type: 'custom',
-      size: 8900,
-      source: 'Video Engagement',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 10)),
-    ),
-    _Audience(
-      id: 'aud007',
-      name: 'Bridal Interest — Women 25-40',
-      type: 'saved',
-      size: 1200000,
-      source: 'Interest + Demo Targeting',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 60)),
-    ),
-    _Audience(
-      id: 'aud008',
-      name: 'LAL 1% — High Value Buyers',
-      type: 'lookalike',
-      size: 2900000,
-      source: 'Purchase Value > ₹5K',
-      status: 'processing',
-      createdAt: DateTime.now().subtract(const Duration(hours: 6)),
-    ),
-    _Audience(
-      id: 'aud009',
-      name: 'FB Page Engaged 30D',
-      type: 'custom',
-      size: 3200,
-      source: 'Facebook Page',
-      status: 'too_small',
-      createdAt: DateTime.now().subtract(const Duration(days: 5)),
-      active: false,
-    ),
-    _Audience(
-      id: 'aud010',
-      name: 'WhatsApp Contacts',
-      type: 'custom',
-      size: 5800,
-      source: 'Customer List',
-      status: 'ready',
-      createdAt: DateTime.now().subtract(const Duration(days: 8)),
-    ),
-  ];
+  // 0 = Audiences, 1 = Creative Matrix, 2 = Buyers
+  int _tab = 0;
 
-  List<_Audience> get _filtered {
-    var list = _audiences.where((a) {
-      final matchSearch = a.name.toLowerCase().contains(_search.toLowerCase()) ||
-          a.source.toLowerCase().contains(_search.toLowerCase());
-      final matchType =
-          _typeFilter == 'All' || a.type == _typeFilter.toLowerCase();
-      return matchSearch && matchType;
-    }).toList();
-    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return list;
-  }
+  // Audience filter
+  String _audienceFilter = 'all'; // all / hot / scalable / watch / kill
 
   @override
   void initState() {
     super.initState();
     _bgC = AnimationController(
-      vsync: this,
+      vsync:    this,
       duration: const Duration(seconds: 8),
     )..repeat(reverse: true);
   }
@@ -164,167 +50,219 @@ class _AudienceScreenState extends ConsumerState<AudienceScreen>
     super.dispose();
   }
 
-  Color _typeColor(String type) {
-    switch (type) {
-      case 'custom':
-        return C.info;
-      case 'lookalike':
-        return C.purple;
-      case 'saved':
-        return C.gold;
-      default:
-        return C.textMuted;
-    }
-  }
+  Future<void> _refresh() async {
+    ref.invalidate(audienceScoresProvider(const AudienceQuery()));
+    ref.invalidate(creativeMatchesProvider(const CreativeQuery()));
+    ref.invalidate(buyerQualityProvider(const BuyerQuery()));
+    ref.invalidate(intelligenceSummaryProvider);
 
-  IconData _typeIcon(String type) {
-    switch (type) {
-      case 'custom':
-        return Icons.people_alt_rounded;
-      case 'lookalike':
-        return Icons.hub_rounded;
-      case 'saved':
-        return Icons.bookmark_rounded;
-      default:
-        return Icons.group_rounded;
-    }
-  }
-
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'ready':
-        return 'Ready';
-      case 'processing':
-        return 'Processing';
-      case 'too_small':
-        return 'Too Small';
-      default:
-        return status;
-    }
-  }
-
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'ready':
-        return C.success;
-      case 'processing':
-        return C.learning;
-      case 'too_small':
-        return C.error;
-      default:
-        return C.textMuted;
-    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content:         Text('✅ Intelligence refreshed'),
+        backgroundColor: C.success,
+        duration:        Duration(seconds: 1),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
-    final customCount =
-        _audiences.where((a) => a.type == 'custom').length;
-    final lalCount =
-        _audiences.where((a) => a.type == 'lookalike').length;
-    final savedCount =
-        _audiences.where((a) => a.type == 'saved').length;
+    final audienceAsync = ref.watch(
+      audienceScoresProvider(const AudienceQuery()),
+    );
+    final creativeAsync = ref.watch(
+      creativeMatchesProvider(const CreativeQuery()),
+    );
+    final buyerAsync = ref.watch(
+      buyerQualityProvider(const BuyerQuery()),
+    );
+    final summaryAsync = ref.watch(intelligenceSummaryProvider);
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new, color: C.textPrimary, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text('Audiences',
-            style: TextStyle(
-                color: C.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.w600)),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.add_rounded, color: C.primary),
-            onPressed: _showCreateAudience,
+      backgroundColor: C.bgDeep,
+      body: Stack(
+        children: [
+          // Animated BG
+          AnimatedBuilder(
+            animation: _bgC,
+            builder:   (_, __) => Container(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(
+                    -0.3 + _bgC.value * 0.4,
+                    -0.7 + _bgC.value * 0.3,
+                  ),
+                  radius: 1.5,
+                  colors: [
+                    C.purple.withValues(alpha: 0.06),
+                    C.primary.withValues(alpha: 0.04),
+                    C.bgDeep,
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                _header(summaryAsync),
+                _tabBar(),
+                const SizedBox(height: 6),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh:       _refresh,
+                    color:           C.primary,
+                    backgroundColor: C.bgCard,
+                    child: _body(
+                      audienceAsync: audienceAsync,
+                      creativeAsync: creativeAsync,
+                      buyerAsync:    buyerAsync,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
-      body: AnimatedBuilder(
-        animation: _bgC,
-        builder: (context, child) {
-          return Container(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment(-0.3, -0.5 + _bgC.value * 0.3),
-                radius: 1.8,
-                colors: [
-                  C.purple.withValues(alpha: 0.05 * _bgC.value),
-                  C.bgDeep,
-                  C.bg,
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // HEADER
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _header(AsyncValue<dynamic> summaryAsync) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Intelligence',
+                  style: TextStyle(
+                    color:      C.textPrimary,
+                    fontSize:   22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Audiences • Creative Matrix • Buyers',
+                  style: TextStyle(
+                    color:    C.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const LiveDot(),
+          const SizedBox(width: 8),
+          GlassIconBtn(
+            icon:  Icons.refresh_rounded,
+            onTap: () async {
+              HapticFeedback.lightImpact();
+              await _refresh();
+            },
+          ),
+          const SizedBox(width: 8),
+          GlassIconBtn(
+            icon:  Icons.auto_awesome_rounded,
+            badge: false,
+            onTap: () async {
+              HapticFeedback.mediumImpact();
+              await ref
+                  .read(intelligenceActionsProvider)
+                  .recompute();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content:         Text('✅ Recompute triggered'),
+                  backgroundColor: C.success,
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // TAB BAR
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _tabBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color:        C.bgCard,
+                borderRadius: BorderRadius.circular(12),
+                border:       Border.all(color: C.glassBorder),
+              ),
+              child: Row(
+                children: [
+                  _tab2(0, Icons.people_alt_rounded,         'Audiences'),
+                  _tab2(1, Icons.grid_view_rounded,          'Creative Matrix'),
+                  _tab2(2, Icons.workspace_premium_rounded,  'Buyers'),
                 ],
               ),
             ),
-            child: child,
-          );
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tab2(int index, IconData icon, String label) {
+    final sel = _tab == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() => _tab = index);
         },
-        child: SafeArea(
-          child: Column(
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical:   9,
+          ),
+          decoration: BoxDecoration(
+            gradient:     sel ? C.primaryGrad : null,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Summary
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-                child: _summary(customCount, lalCount, savedCount),
+              Icon(
+                icon,
+                color: sel ? Colors.black : C.textMuted,
+                size:  14,
               ),
-
-              // Search + Filters
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                child: GlassSearch(
-                  hint: 'Search audiences...',
-                  onChanged: (v) => setState(() => _search = v),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color:      sel ? Colors.black : C.textMuted,
+                    fontSize:   10,
+                    fontWeight: sel
+                        ? FontWeight.w900
+                        : FontWeight.w400,
+                  ),
+                  maxLines:  1,
+                  overflow:  TextOverflow.ellipsis,
                 ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 36,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  children: ['All', 'Custom', 'Lookalike', 'Saved']
-                      .map((t) => Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: FilterChip2(
-                              label: t,
-                              selected: _typeFilter == t,
-                              onTap: () =>
-                                  setState(() => _typeFilter = t),
-                            ),
-                          ))
-                      .toList(),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // List
-              Expanded(
-                child: filtered.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.group_off_rounded,
-                                color: C.textMuted, size: 48),
-                            const SizedBox(height: 12),
-                            Text('No audiences found',
-                                style: TextStyle(
-                                    color: C.textSecondary, fontSize: 14)),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                        itemCount: filtered.length,
-                        itemBuilder: (ctx, i) =>
-                            _audienceTile(filtered[i]),
-                      ),
               ),
             ],
           ),
@@ -333,520 +271,684 @@ class _AudienceScreenState extends ConsumerState<AudienceScreen>
     );
   }
 
-  Widget _summary(int custom, int lal, int saved) {
-    return Row(
-      children: [
-        _summaryChip('Custom', custom, C.info),
-        const SizedBox(width: 10),
-        _summaryChip('Lookalike', lal, C.purple),
-        const SizedBox(width: 10),
-        _summaryChip('Saved', saved, C.gold),
-      ],
-    );
+  // ══════════════════════════════════════════════════════════════
+  // BODY ROUTER
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _body({
+    required AsyncValue<List<AudienceScore>> audienceAsync,
+    required AsyncValue<List<CreativeMatch>> creativeAsync,
+    required AsyncValue<List<BuyerQuality>> buyerAsync,
+  }) {
+    switch (_tab) {
+      case 0:
+        return _audienceTab(audienceAsync);
+      case 1:
+        return _creativeMatrixTab(creativeAsync);
+      case 2:
+        return _buyersTab(buyerAsync);
+      default:
+        return _audienceTab(audienceAsync);
+    }
   }
 
-  Widget _summaryChip(String label, int count, Color color) {
-    return Expanded(
-      child: GlassCard(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: color,
-                boxShadow: [
-                  BoxShadow(
-                      color: color.withValues(alpha: 0.5),
-                      blurRadius: 6),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(label,
-                  style: TextStyle(color: C.textSecondary, fontSize: 11)),
-            ),
-            Text('$count',
-                style: TextStyle(
-                    color: C.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700)),
-          ],
-        ),
+  // ══════════════════════════════════════════════════════════════
+  // TAB 0: AUDIENCES
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _audienceTab(
+    AsyncValue<List<AudienceScore>> audienceAsync,
+  ) {
+    return audienceAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: C.primary),
       ),
-    );
-  }
+      error: (e, _) => _errorState(
+        'Failed to load audience scores',
+        e.toString(),
+        () => ref.invalidate(audienceScoresProvider(const AudienceQuery())),
+      ),
+      data: (audiences) {
+        if (audiences.isEmpty) {
+          return EmptyState(
+            icon:        Icons.people_alt_outlined,
+            title:       'No audience scores yet',
+            subtitle:    'Run intelligence recompute to generate scores',
+            actionLabel: 'Recompute',
+            onAction:    () async {
+              await ref.read(intelligenceActionsProvider).recompute();
+            },
+          );
+        }
 
-  Widget _audienceTile(_Audience a) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GlassCard(
-        onTap: () => _showAudienceDetail(a),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        // Filter
+        final filtered = _audienceFilter == 'all'
+            ? audiences
+            : audiences
+                .where((a) => a.status == _audienceFilter)
+                .toList();
+
+        // Stats
+        final hot       = audiences.where((a) => a.isHot).length;
+        final scalable  = audiences.where((a) => a.isScalable).length;
+        final watch     = audiences.where((a) => a.isWatch).length;
+        final kill      = audiences.where((a) => a.isKill).length;
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 110),
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: _typeColor(a.type).withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(_typeIcon(a.type),
-                      color: _typeColor(a.type), size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(a.name,
-                          style: TextStyle(
-                              color: C.textPrimary,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 3),
-                      Text(a.source,
-                          style: TextStyle(
-                              color: C.textSecondary, fontSize: 11)),
-                    ],
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: _statusColor(a.status)
-                            .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(_statusLabel(a.status),
-                          style: TextStyle(
-                              color: _statusColor(a.status),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600)),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(U.ago(a.createdAt),
-                        style:
-                            TextStyle(color: C.textMuted, fontSize: 10)),
-                  ],
-                ),
-              ],
+            // Summary bar
+            _audienceSummaryBar(
+              hot:      hot,
+              scalable: scalable,
+              watch:    watch,
+              kill:     kill,
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _audienceStat('Size', U.num(a.size.toDouble())),
-                Container(
-                  width: 1,
-                  height: 20,
-                  color: C.glassBorder,
-                  margin: const EdgeInsets.symmetric(horizontal: 14),
-                ),
-                _audienceStat('Type', a.type[0].toUpperCase() + a.type.substring(1)),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _typeColor(a.type).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                        color: _typeColor(a.type).withValues(alpha: 0.3)),
-                  ),
+            const SizedBox(height: 10),
+
+            // Filter chips
+            _audienceFilterRow(),
+            const SizedBox(height: 10),
+
+            // Audience tiles
+            if (filtered.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(
                   child: Text(
-                    a.type.toUpperCase(),
+                    'No audiences match this filter',
                     style: TextStyle(
-                        color: _typeColor(a.type),
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5),
+                      color:    C.textSecondary,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _audienceStat(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: C.textMuted, fontSize: 10)),
-        const SizedBox(height: 2),
-        Text(value,
-            style: TextStyle(
-                color: C.textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600)),
-      ],
-    );
-  }
-
-  void _showAudienceDetail(_Audience a) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [C.bgCard, C.bgDeep],
+              )
+            else
+              ...filtered.map(
+                (a) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: AudienceScoreTile(audience: a),
+                ),
               ),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border.all(color: C.glassBorder),
-            ),
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: C.glassBorder,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: _typeColor(a.type).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Icon(_typeIcon(a.type),
-                          color: _typeColor(a.type), size: 24),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(a.name,
-                              style: TextStyle(
-                                  color: C.textPrimary,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600)),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: _typeColor(a.type)
-                                      .withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  a.type.toUpperCase(),
-                                  style: TextStyle(
-                                      color: _typeColor(a.type),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: _statusColor(a.status)
-                                      .withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  _statusLabel(a.status),
-                                  style: TextStyle(
-                                      color: _statusColor(a.status),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                _detailRow('Audience Size', U.num(a.size.toDouble())),
-                _detailRow('Source', a.source),
-                _detailRow('Created', U.dateFull(a.createdAt)),
-                _detailRow('Status', _statusLabel(a.status)),
-                _detailRow('ID', a.id),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlineBtn(
-                        label: 'Use in Campaign',
-                        icon: Icons.campaign_rounded,
-                        color: C.primary,
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                  'Audience "${a.name}" ready to use'),
-                              backgroundColor: C.success,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlineBtn(
-                        label: 'Create Lookalike',
-                        icon: Icons.hub_rounded,
-                        color: C.purple,
-                        onTap: () => Navigator.pop(ctx),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                OutlineBtn(
-                  label: 'Delete Audience',
-                  icon: Icons.delete_outline_rounded,
-                  color: C.error,
-                  onTap: () => Navigator.pop(ctx),
-                ),
-                const SizedBox(height: 10),
-              ],
-            ),
-          ),
-        ),
-      ),
+          ],
+        );
+      },
     );
   }
 
-  Widget _detailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+  Widget _audienceSummaryBar({
+    required int hot,
+    required int scalable,
+    required int watch,
+    required int kill,
+  }) {
+    return GlassCard(
+      radius:  16,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          Text(label, style: TextStyle(color: C.textSecondary, fontSize: 13)),
-          Text(value,
-              style: TextStyle(
-                  color: C.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500)),
+          _summItem('Hot',      '$hot',      C.success),
+          _vDivider(),
+          _summItem('Scalable', '$scalable', C.primary),
+          _vDivider(),
+          _summItem('Watch',    '$watch',    C.warning),
+          _vDivider(),
+          _summItem('Kill',     '$kill',     C.error),
         ],
       ),
     );
   }
 
-  void _showCreateAudience() {
-    final nameCtrl = TextEditingController();
-    String selectedType = 'custom';
-    String selectedSource = 'Pixel';
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => ClipRRect(
-          borderRadius:
-              const BorderRadius.vertical(top: Radius.circular(24)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [C.bgCard, C.bgDeep],
-                ),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border.all(color: C.glassBorder),
-              ),
-              padding: EdgeInsets.fromLTRB(
-                  24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: C.glassBorder,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text('Create Audience',
-                      style: TextStyle(
-                          color: C.textPrimary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 20),
-                  GlassInput(
-                    label: 'Audience Name',
-                    hint: 'e.g. Website Buyers 90D',
-                    controller: nameCtrl,
-                    prefixIcon: Icons.group_add_rounded,
-                  ),
-                  const SizedBox(height: 16),
-                  Text('Type',
-                      style: TextStyle(
-                          color: C.textSecondary,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: ['custom', 'lookalike', 'saved'].map((t) {
-                      final sel = selectedType == t;
-                      return Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                              right: t != 'saved' ? 8 : 0),
-                          child: GestureDetector(
-                            onTap: () =>
-                                setSheetState(() => selectedType = t),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 12),
-                              decoration: BoxDecoration(
-                                color: sel
-                                    ? _typeColor(t)
-                                        .withValues(alpha: 0.15)
-                                    : C.glassWhite,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: sel
-                                      ? _typeColor(t)
-                                          .withValues(alpha: 0.5)
-                                      : C.glassBorder,
-                                ),
-                              ),
-                              child: Column(
-                                children: [
-                                  Icon(_typeIcon(t),
-                                      color: sel
-                                          ? _typeColor(t)
-                                          : C.textMuted,
-                                      size: 22),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    t[0].toUpperCase() + t.substring(1),
-                                    style: TextStyle(
-                                        color: sel
-                                            ? _typeColor(t)
-                                            : C.textSecondary,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
-// Source Selector (manual chips instead of GlassDropdown)
-Text('Source',
-    style: TextStyle(
-        color: C.textSecondary,
-        fontSize: 13,
-        fontWeight: FontWeight.w500)),
-const SizedBox(height: 8),
-Wrap(
-  spacing: 8,
-  runSpacing: 8,
-  children: [
-    'Pixel',
-    'Customer List',
-    'Instagram Page',
-    'Facebook Page',
-    'Video Engagement',
-    'App Activity',
-  ].map((s) {
-    final sel = selectedSource == s;
-    return GestureDetector(
-      onTap: () => setSheetState(() => selectedSource = s),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: sel
-              ? C.primary.withValues(alpha: 0.15)
-              : C.glassWhite,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: sel
-                ? C.primary.withValues(alpha: 0.5)
-                : C.glassBorder,
+  Widget _summItem(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            color:      color,
+            fontSize:   18,
+            fontWeight: FontWeight.w900,
           ),
         ),
-        child: Text(s,
-            style: TextStyle(
-                color: sel ? C.primary : C.textSecondary,
-                fontSize: 12,
-                fontWeight: FontWeight.w600)),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: const TextStyle(
+            color:    C.textMuted,
+            fontSize: 10,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _vDivider() =>
+      Container(width: 1, height: 28, color: C.glassBorder);
+
+  Widget _audienceFilterRow() {
+    final filters = [
+      ('all', 'All', C.textSecondary),
+      ('hot', 'Hot 🔥', C.success),
+      ('scalable', 'Scalable', C.primary),
+      ('watch', 'Watch', C.warning),
+      ('kill', 'Kill', C.error),
+    ];
+
+    return SizedBox(
+      height: 34,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: filters.map((f) {
+          final sel = _audienceFilter == f.$1;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() => _audienceFilter = f.$1);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical:   7,
+                ),
+                decoration: BoxDecoration(
+                  color: sel
+                      ? f.$3.withValues(alpha: 0.15)
+                      : C.glassWhite,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: sel
+                        ? f.$3.withValues(alpha: 0.4)
+                        : C.glassBorder,
+                  ),
+                ),
+                child: Text(
+                  f.$2,
+                  style: TextStyle(
+                    color: sel ? f.$3 : C.textSecondary,
+                    fontSize:   11,
+                    fontWeight: sel
+                        ? FontWeight.w900
+                        : FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
       ),
     );
-  }).toList(),
-),
-                  const SizedBox(height: 24),
-                  PrimaryBtn(
-                    label: 'Create Audience',
-                    icon: Icons.add_rounded,
-                    onTap: () {
-                      if (nameCtrl.text.isNotEmpty) {
-                        Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                '✅ Audience "${nameCtrl.text}" created'),
-                            backgroundColor: C.success,
-                          ),
-                        );
-                      }
-                    },
-                  ),
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // TAB 1: CREATIVE MATRIX
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _creativeMatrixTab(
+    AsyncValue<List<CreativeMatch>> creativeAsync,
+  ) {
+    return creativeAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: C.primary),
+      ),
+      error: (e, _) => _errorState(
+        'Failed to load creative matrix',
+        e.toString(),
+        () => ref.invalidate(
+          creativeMatchesProvider(const CreativeQuery()),
+        ),
+      ),
+      data: (creatives) {
+        if (creatives.isEmpty) {
+          return EmptyState(
+            icon:        Icons.grid_view_outlined,
+            title:       'No creative scores yet',
+            subtitle:    'Run intelligence recompute to generate the matrix',
+            actionLabel: 'Recompute',
+            onAction:    () async {
+              await ref.read(intelligenceActionsProvider).recompute();
+            },
+          );
+        }
+
+        // Sorted: winners first
+        final sorted = [...creatives]
+          ..sort((a, b) => b.matchScore.compareTo(a.matchScore));
+
+        final winners  = sorted.where((c) => c.isWinner).length;
+        final testMore = sorted.where((c) => c.isTestMore).length;
+        final weak     = sorted.where((c) => c.isWeak).length;
+        final stop     = sorted.where((c) => c.isStop).length;
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 110),
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            // Creative summary bar
+            GlassCard(
+              radius:  16,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical:   12,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _summItem('Winner',   '$winners',  C.success),
+                  _vDivider(),
+                  _summItem('Test',     '$testMore', C.primary),
+                  _vDivider(),
+                  _summItem('Weak',     '$weak',     C.warning),
+                  _vDivider(),
+                  _summItem('Stop',     '$stop',     C.error),
                 ],
               ),
             ),
+            const SizedBox(height: 14),
+
+            // Heatmap section
+            GlassCard(
+              radius:  18,
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.grid_view_rounded,
+                        color: C.primary,
+                        size:  16,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'Audience × Creative Heatmap',
+                        style: TextStyle(
+                          color:      C.textPrimary,
+                          fontSize:   13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  MatrixHeatmap(matches: sorted),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // Individual creative tiles
+            const SectionHeader(title: 'All Creatives'),
+            const SizedBox(height: 10),
+            ...sorted.map(
+              (c) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _creativeMatchTile(c),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _creativeMatchTile(CreativeMatch c) {
+    final statusColor = c.isWinner
+        ? C.success
+        : c.isTestMore
+            ? C.primary
+            : c.isWeak
+                ? C.warning
+                : C.error;
+
+    final statusLabel = c.isWinner
+        ? 'WINNER'
+        : c.isTestMore
+            ? 'TEST MORE'
+            : c.isWeak
+                ? 'WEAK'
+                : 'STOP';
+
+    return GlassCard(
+      radius:  18,
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          // Match score badge
+          ScoreBadge(score: c.matchScore, size: 52),
+          const SizedBox(width: 14),
+
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Name + status
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        c.creativeName,
+                        style: const TextStyle(
+                          color:      C.textPrimary,
+                          fontSize:   13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical:   4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: statusColor.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Text(
+                        statusLabel,
+                        style: TextStyle(
+                          color:      statusColor,
+                          fontSize:   9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+
+                // Metrics
+                Row(
+                  children: [
+                    _miniChip(
+                      'ROAS',
+                      U.roas(c.roas),
+                      c.roas >= 4 ? C.success : C.textMuted,
+                    ),
+                    const SizedBox(width: 8),
+                    _miniChip(
+                      'CTR',
+                      U.pct(c.ctr),
+                      c.ctr >= 3 ? C.success : C.textMuted,
+                    ),
+                    const SizedBox(width: 8),
+                    _miniChip(
+                      'Fatigue',
+                      c.fatigueScore.toStringAsFixed(0),
+                      c.fatigueScore >= 50 ? C.warning : C.textMuted,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+
+                // Fatigue score bar
+                ScoreBar(score: 100 - c.fatigueScore),
+
+                // Top reason
+                if (c.reasons.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    c.reasons.first,
+                    style: TextStyle(
+                      color:     statusColor.withValues(alpha: 0.85),
+                      fontSize:  10,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniChip(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color:        C.glassWhite,
+        borderRadius: BorderRadius.circular(6),
+        border:       Border.all(color: C.glassBorder),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              color:      color,
+              fontSize:   10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(
+              color:    C.textMuted,
+              fontSize: 8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // TAB 2: BUYERS
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _buyersTab(AsyncValue<List<BuyerQuality>> buyerAsync) {
+    return buyerAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: C.primary),
+      ),
+      error: (e, _) => _errorState(
+        'Failed to load buyer quality',
+        e.toString(),
+        () => ref.invalidate(
+          buyerQualityProvider(const BuyerQuery()),
         ),
       ),
+      data: (buyers) {
+        if (buyers.isEmpty) {
+          return EmptyState(
+            icon:        Icons.workspace_premium_outlined,
+            title:       'No buyer scores yet',
+            subtitle:    'Buyer quality is computed from CRM lead data',
+            actionLabel: 'Recompute',
+            onAction:    () async {
+              await ref.read(intelligenceActionsProvider).recompute();
+            },
+          );
+        }
+
+        final sorted = [...buyers]
+          ..sort(
+            (a, b) =>
+                b.buyerQualityScore.compareTo(a.buyerQualityScore),
+          );
+
+        final platinum = buyers.where((b) => b.isPlatinum).length;
+        final gold     = buyers.where((b) => b.isGold).length;
+        final silver   = buyers.where((b) => b.isSilver).length;
+        final risk     = buyers.where((b) => b.isRisk).length;
+        final seeds    = buyers.where((b) => b.isSeedEligible).length;
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 110),
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            // Tier summary
+            GlassCard(
+              radius:  16,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical:   12,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _summItem('Platinum', '$platinum', C.primary),
+                  _vDivider(),
+                  _summItem('Gold',     '$gold',     C.gold),
+                  _vDivider(),
+                  _summItem('Silver',   '$silver',   C.textSecondary),
+                  _vDivider(),
+                  _summItem('Risk',     '$risk',     C.error),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Seed candidates banner
+            if (seeds > 0) ...[
+              GlassCard(
+                radius:    16,
+                turquoise: true,
+                padding:   const EdgeInsets.all(14),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        gradient:     C.primaryGrad,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.grain_rounded,
+                        color: Colors.black,
+                        size:  18,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$seeds Lookalike Seed Candidate(s)',
+                            style: const TextStyle(
+                              color:      C.textPrimary,
+                              fontSize:   13,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Gold/Platinum buyers with zero refunds. '
+                            'Push to Meta for 1% LAL.',
+                            style: const TextStyle(
+                              color:    C.textSecondary,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    OutlineBtn(
+                      label: 'Push',
+                      icon:  Icons.upload_rounded,
+                      color: C.primary,
+                      onTap: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              '🔄 Platinum Seed Sync coming in Phase 4',
+                            ),
+                            backgroundColor: C.bgCard,
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+
+            // Buyer tiles
+            SectionHeader(title: 'All Buyers (${buyers.length})'),
+            const SizedBox(height: 10),
+            ...sorted.map(
+              (b) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: BuyerQualityTile(buyer: b),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // SHARED ERROR STATE
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _errorState(
+    String title,
+    String message,
+    VoidCallback onRetry,
+  ) {
+    return ListView(
+      physics:  const AlwaysScrollableScrollPhysics(),
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(24),
+          child: GlassCard(
+            radius:  18,
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  color: C.error,
+                  size:  28,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color:      C.textPrimary,
+                    fontSize:   16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color:    C.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                OutlineBtn(
+                  label: 'Retry',
+                  icon:  Icons.refresh_rounded,
+                  onTap: onRetry,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

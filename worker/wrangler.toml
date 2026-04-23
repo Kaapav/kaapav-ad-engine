@@ -25,4 +25,8 @@ binding = "SESSIONS"
 id = "fc1aff42a40d4b728fbb0dc2b9fc2df3"
 
 [triggers]
-crons = ["0 */6 * * *", "30 2 * * *", "0 */2 * * *"]
+crons = [
+  "30 2 * * *",     # Daily report (8AM IST)
+  "0 */2 * * *",    # Campaign cache refresh
+  "*/30 * * * *"    # Real-time monitor every 30 mins
+]

@@ -18,6 +18,8 @@ export type Bindings = {
   WHATSAPP_BOT_URL: string;
   ENVIRONMENT: string;
   META_API_VERSION: string;
+  GOOGLE_CLIENT_EMAIL: string;
+  GOOGLE_PRIVATE_KEY: string;
 };
 
 export type AppEnv = {

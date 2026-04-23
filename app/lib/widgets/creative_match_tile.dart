@@ -4,6 +4,7 @@ import 'package:kaapav_ad_engine/core/utils.dart';
 import 'package:kaapav_ad_engine/models/creative_match.dart';
 import 'package:kaapav_ad_engine/widgets/glass_card.dart';
 import 'package:kaapav_ad_engine/widgets/score_badge.dart';
+import 'status_badge.dart';
 
 class CreativeMatchTile extends StatelessWidget {
   final CreativeMatch m;
@@ -51,7 +52,7 @@ class CreativeMatchTile extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  m.displayName,
+                  m.creativeName ?? 'Unnamed Creative',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -62,7 +63,7 @@ class CreativeMatchTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              StatusPill(text: m.status.toUpperCase(), color: sc),
+              StatusBadge(status: m.status),
             ],
           ),
           const SizedBox(height: 6),
@@ -82,7 +83,7 @@ class CreativeMatchTile extends StatelessWidget {
             spacing: 10,
             runSpacing: 10,
             children: [
-              ScoreBadge(score: m.matchScore, label: 'Match'),
+              ScoreBadge(score: m.matchScore),
               _mini(
                 'Fatigue',
                 m.fatigueScore.toStringAsFixed(0),

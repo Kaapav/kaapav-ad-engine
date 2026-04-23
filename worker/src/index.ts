@@ -16,6 +16,8 @@ import sheetsRoutes from './routes/sheets';
 import * as MetaApi from './services/meta-api';
 import { notify } from './services/fcm';
 import { evaluateRules } from './services/rule-engine';
+import { runIntelligenceOrchestrator } 
+  from './services/intelligence-orchestrator';
 
 const app = new Hono<AppEnv>();
 
@@ -136,19 +138,11 @@ app.get('/api/intelligence/summary', async (c) => {
 });
 
 app.post('/api/intelligence/recompute', async (c) => {
-  try {
-    const result = await runIntelligenceBootstrap(c.env, {
-      source: 'manual',
-      notifyCritical: true,
-    });
-
-    return c.json({
-      success: true,
-      data: result,
-    });
-  } catch (err: any) {
-    return c.json({ success: false, error: err.message }, 500);
-  }
+  const result = await runIntelligenceOrchestrator(c.env, {
+    source: 'manual',
+    notifyCritical: true,
+  });
+  return c.json({ success: true, data: result });
 });
 
 // ─────────────────────────────────────────────
@@ -398,6 +392,217 @@ app.post('/api/intelligence/recommendations/:id/dismiss', async (c) => {
   }
 });
 
+// GET /api/intelligence/refund-roas
+app.get('/api/intelligence/refund-roas', async (c) => {
+  try {
+    const q     = c.req.query();
+    const limit = Math.min(100, Math.max(1, Number(q.limit ?? 50)));
+    const trust = q.trust_level?.trim();
+
+    const where: string[] = [];
+    const bind: unknown[] = [];
+
+    if (trust) {
+      where.push('trust_level = ?');
+      bind.push(trust);
+    }
+
+    // Get latest per campaign using subquery
+    const sql =
+      `SELECT r.*
+       FROM refund_adjusted_roas r
+       INNER JOIN (
+         SELECT campaign_id, MAX(computed_at) as latest
+         FROM refund_adjusted_roas
+         GROUP BY campaign_id
+       ) m ON r.campaign_id = m.campaign_id
+          AND r.computed_at = m.latest
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY ABS(roas_delta) DESC
+       LIMIT ?`;
+
+    bind.push(limit);
+
+    const rows = await c.env.DB.prepare(sql).bind(...bind).all();
+
+    return c.json({
+      success: true,
+      data: rows.results ?? [],
+      meta: { total: (rows.results ?? []).length },
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// GET /api/intelligence/scale-decisions
+app.get('/api/intelligence/scale-decisions', async (c) => {
+  try {
+    const q        = c.req.query();
+    const limit    = Math.min(100, Math.max(1, Number(q.limit ?? 50)));
+    const action   = q.action_type?.trim();
+    const priority = q.priority?.trim();
+
+    const where: string[] = [
+      `status = 'open'`,
+      `id LIKE 'scale:%'`,
+    ];
+    const bind: unknown[] = [];
+
+    if (action) {
+      where.push('action_type = ?');
+      bind.push(action);
+    }
+
+    if (priority) {
+      where.push('priority = ?');
+      bind.push(priority);
+    }
+
+    const sql =
+      `SELECT *
+       FROM optimization_recommendations
+       WHERE ${where.join(' AND ')}
+       ORDER BY
+         CASE priority
+           WHEN 'critical' THEN 4
+           WHEN 'high'     THEN 3
+           WHEN 'medium'   THEN 2
+           WHEN 'low'      THEN 1
+           ELSE 0
+         END DESC,
+         COALESCE(score, 0) DESC
+       LIMIT ?`;
+
+    bind.push(limit);
+
+    const rows = await c.env.DB.prepare(sql).bind(...bind).all();
+
+    return c.json({
+      success: true,
+      data: rows.results ?? [],
+      meta: { total: (rows.results ?? []).length },
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /api/intelligence/geo
+// ─────────────────────────────────────────────
+app.get('/api/intelligence/geo', async (c) => {
+  try {
+    const q      = c.req.query();
+    const status = q.status?.trim();
+    const limit  = Math.min(100, Math.max(1, Number(q.limit ?? 50)));
+
+    const where: string[] = [];
+    const bind:  unknown[] = [];
+
+    if (status) {
+      where.push('status = ?');
+      bind.push(status);
+    }
+
+    const sql =
+      `SELECT *
+       FROM geo_intent_scores
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY intent_score DESC
+       LIMIT ?`;
+
+    bind.push(limit);
+    const rows = await c.env.DB.prepare(sql).bind(...bind).all();
+
+    return c.json({
+      success: true,
+      data:    rows.results ?? [],
+      meta:    { total: (rows.results ?? []).length },
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /api/intelligence/response-speed
+// ─────────────────────────────────────────────
+app.get('/api/intelligence/response-speed', async (c) => {
+  try {
+    const rows = await c.env.DB.prepare(
+      `SELECT bucket, count, conversion_rate,
+              avg_revenue, computed_at
+       FROM response_speed_insights
+       ORDER BY computed_at DESC
+       LIMIT 12`,
+    ).all();
+
+    return c.json({
+      success: true,
+      data:    rows.results ?? [],
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /api/intelligence/seed-log
+// ─────────────────────────────────────────────
+app.get('/api/intelligence/seed-log', async (c) => {
+  try {
+    const rows = await c.env.DB.prepare(
+      `SELECT * FROM seed_sync_log
+       ORDER BY synced_at DESC
+       LIMIT 10`,
+    ).all();
+
+    return c.json({
+      success: true,
+      data:    rows.results ?? [],
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─────────────────────────────────────────────
+// POST /api/intelligence/seed-sync
+// Manual trigger for Platinum Seed Sync
+// ─────────────────────────────────────────────
+app.post('/api/intelligence/seed-sync', async (c) => {
+  try {
+    const { runSeedSync } = await import('./services/seed-sync');
+    const result = await runSeedSync(c.env);
+
+    return c.json({
+      success: true,
+      data:    result,
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─────────────────────────────────────────────
+// POST /api/intelligence/monitor
+// Manual trigger for real-time monitor
+// ─────────────────────────────────────────────
+app.post('/api/intelligence/monitor', async (c) => {
+  try {
+    const { runRealtimeMonitor } = await import('./services/realtime-monitor');
+    const result = await runRealtimeMonitor(c.env);
+
+    return c.json({
+      success: true,
+      data:    result,
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
 // ─────────────────────────────────────────────
 // Export handler
 // ─────────────────────────────────────────────
@@ -412,16 +617,26 @@ export default {
     switch (controller.cron) {
       // Every 6 hours → evaluate rules + bootstrap intelligence refresh
       case '0 */6 * * *':
-        ctx.waitUntil(
-          Promise.all([
-            evaluateRules(env),
-            runIntelligenceBootstrap(env, {
-              source: 'cron_6h',
-              notifyCritical: true,
-            }),
-          ]),
-        );
-        break;
+  ctx.waitUntil(
+    Promise.all([
+      evaluateRules(env),
+      runIntelligenceOrchestrator(env, {
+        source: 'cron_6h',
+        notifyCritical: true,
+      }),
+    ]),
+  );
+  break;
+ 
+  // ADD this case to your scheduled switch:
+case '*/30 * * * *':
+  ctx.waitUntil(
+    Promise.all([
+      runRealtimeMonitor(env),
+      runResponseSpeedEngine(env),
+    ]),
+  );
+  break;
 
       // Every day 8 AM → daily report
       case '30 2 * * *':

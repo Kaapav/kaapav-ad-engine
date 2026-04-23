@@ -9,6 +9,11 @@ import '../models/insights.dart';
 import '../models/lead.dart';
 import '../models/rule.dart';
 import 'meta_auth.dart';
+import '../models/intelligence_summary.dart';
+import '../models/audience_score.dart';
+import '../models/creative_match.dart';
+import '../models/buyer_quality.dart';
+import '../models/optimization_recommendation.dart';
 
 /// 🔥 Production-ready Worker API Service
 /// All external business/API access should go through Cloudflare Worker.
@@ -135,6 +140,23 @@ Never _throwDioError(
         }
         throw Exception(e.message ?? fallbackMessage);
     }
+  }
+
+   // ══════════════════════════════════════════════════════════════
+  // Auth Headers Helper
+  // ══════════════════════════════════════════════════════════════
+
+  Future<Map<String, String>> _authHeaders() async {
+    final apiKey = await _auth.getApiKey();
+    final session = await _auth.getSessionToken();
+    
+    if (session != null && session.trim().isNotEmpty) {
+      return {'Authorization': 'Bearer ${session.trim()}'};
+    }
+    if (apiKey != null && apiKey.trim().isNotEmpty) {
+      return {'X-API-Key': apiKey.trim()};
+    }
+    return {};
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -728,15 +750,314 @@ Future<Map<String, dynamic>> getCrmStats() async {
   }
 
   Future<void> syncLeadsToSheets(String sheetId) async {
-    try {
-      final response = await _dio.post(
-        '/api/sheets/sync-leads',
-        data: {'sheetId': sheetId},
-      );
+  try {
+    final response = await _dio.post(
+      '/api/sheets/sync-leads',
+      data: {'sheetId': sheetId},
+    );
+    _unwrapData(response, fallbackError: 'Failed to sync leads to Sheets');
+  } on DioException catch (e) {
+    _throwDioError(e, fallbackMessage: 'Failed to sync leads to Sheets');
+  }
+}
 
-      _unwrapData(response, fallbackError: 'Failed to sync leads to Sheets');
+  // ══════════════════════════════════════════════════════════════
+  // Intelligence Endpoints
+  // ══════════════════════════════════════════════════════════════
+
+  Future<IntelligenceSummary> getIntelligenceSummary() async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/summary',
+        options: Options(headers: headers),
+      );
+      final data = _asMap(
+        _unwrapData(response, fallbackError: 'Failed to fetch intelligence summary'),
+        context: 'intelligence summary',
+      );
+      return IntelligenceSummary.fromJson(data);
     } on DioException catch (e) {
-      _throwDioError(e, fallbackMessage: 'Failed to sync leads to Sheets');
+      _throwDioError(e, fallbackMessage: 'Failed to fetch intelligence summary');
+    }
+  }
+
+  Future<List<AudienceScore>> getAudienceScores({
+    String? status,
+    String? campaignId,
+    String? adsetId,
+    int limit = 100,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/audiences',
+        queryParameters: {
+          if (status != null) 'status': status,
+          if (campaignId != null) 'campaign_id': campaignId,
+          if (adsetId != null) 'adset_id': adsetId,
+          'limit': limit,
+        },
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch audience scores',
+      );
+      return list
+          .map((json) => AudienceScore.fromJson(_asMap(json, context: 'audience score')))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch audience scores');
+    }
+  }
+
+  Future<List<CreativeMatch>> getCreativeMatches({
+    String? status,
+    String? campaignId,
+    String? audienceKey,
+    int limit = 100,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/creatives',
+        queryParameters: {
+          if (status != null) 'status': status,
+          if (campaignId != null) 'campaign_id': campaignId,
+          if (audienceKey != null) 'audience_key': audienceKey,
+          'limit': limit,
+        },
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch creative matches',
+      );
+      return list
+          .map((json) => CreativeMatch.fromJson(_asMap(json, context: 'creative match')))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch creative matches');
+    }
+  }
+
+  Future<List<BuyerQuality>> getBuyerQuality({
+    String? tier,
+    bool? lookalikeSeedEligible,
+    String? productAffinity,
+    int limit = 100,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/buyers',
+        queryParameters: {
+          if (tier != null) 'tier': tier,
+          if (lookalikeSeedEligible != null) 'lookalike_seed_eligible': lookalikeSeedEligible,
+          if (productAffinity != null) 'product_affinity': productAffinity,
+          'limit': limit,
+        },
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch buyer quality',
+      );
+      return list
+          .map((json) => BuyerQuality.fromJson(_asMap(json, context: 'buyer quality')))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch buyer quality');
+    }
+  }
+
+  Future<List<OptimizationRecommendation>> getRecommendations({
+    String? status,
+    String? priority,
+    int limit = 100,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/recommendations',
+        queryParameters: {
+          if (status != null) 'status': status,
+          if (priority != null) 'priority': priority,
+          'limit': limit,
+        },
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch recommendations',
+      );
+      return list
+          .map((json) => OptimizationRecommendation.fromJson(_asMap(json, context: 'recommendation')))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch recommendations');
+    }
+  }
+
+  Future<Map<String, dynamic>> getRefundRoas({
+  String? campaignId,
+  String? datePreset,
+}) async {
+  try {
+    final headers = await _authHeaders();
+    final response = await _dio.get(
+      '/api/intelligence/refund-roas',
+      queryParameters: {
+        if (campaignId != null) 'campaign_id': campaignId,
+        if (datePreset != null) 'date_preset': datePreset,
+      },
+      options: Options(headers: headers),
+    );
+    return _asMap(
+      _unwrapData(response, fallbackError: 'Failed to fetch refund ROAS'),
+      context: 'refund roas',
+    );
+  } on DioException catch (e) {
+    _throwDioError(e, fallbackMessage: 'Failed to fetch refund ROAS');
+  }
+}
+
+  Future<bool> applyRecommendation(String recommendationId) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.post(
+        '/api/intelligence/recommendations/$recommendationId/apply',
+        options: Options(headers: headers),
+      );
+      return response.statusCode == 200;
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to apply recommendation');
+    }
+  }
+
+  Future<bool> dismissRecommendation(String recommendationId) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.post(
+        '/api/intelligence/recommendations/$recommendationId/dismiss',
+        options: Options(headers: headers),
+      );
+      return response.statusCode == 200;
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to dismiss recommendation');
+    }
+  }
+
+  Future<Map<String, dynamic>> recomputeIntelligence() async {
+  try {
+    final headers = await _authHeaders();
+    final response = await _dio.post(
+      '/api/intelligence/recompute',
+      options: Options(headers: headers),
+    );
+    return _asMap(
+      _unwrapData(response, fallbackError: 'Failed to recompute intelligence'),
+      context: 'recompute result',
+    );
+  } on DioException catch (e) {
+    _throwDioError(e, fallbackMessage: 'Failed to recompute intelligence');
+  }
+}
+
+  Future<List<Map<String, dynamic>>> getGeoIntent({
+    String? status,
+    int limit = 50,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/geo',
+        queryParameters: {
+          if (status != null) 'status': status,
+          'limit': limit,
+        },
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch geo intent',
+      );
+      return list
+          .map((item) => _asMap(item, context: 'geo intent'))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch geo intent');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getResponseSpeed() async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/response-speed',
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch response speed',
+      );
+      return list
+          .map((item) => _asMap(item, context: 'response speed'))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch response speed');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getSeedSyncLog() async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.get(
+        '/api/intelligence/seed-log',
+        options: Options(headers: headers),
+      );
+      final list = _unwrapList(
+        response,
+        fallbackError: 'Failed to fetch seed sync log',
+      );
+      return list
+          .map((item) => _asMap(item, context: 'seed sync log'))
+          .toList();
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to fetch seed sync log');
+    }
+  }
+
+  Future<Map<String, dynamic>> triggerSeedSync() async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.post(
+        '/api/intelligence/seed-sync',
+        options: Options(headers: headers),
+      );
+      return _asMap(
+        _unwrapData(response, fallbackError: 'Failed to trigger seed sync'),
+        context: 'seed sync result',
+      );
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to trigger seed sync');
+    }
+  }
+
+  Future<Map<String, dynamic>> triggerMonitor() async {
+    try {
+      final headers = await _authHeaders();
+      final response = await _dio.post(
+        '/api/intelligence/monitor',
+        options: Options(headers: headers),
+      );
+      return _asMap(
+        _unwrapData(response, fallbackError: 'Failed to trigger monitor'),
+        context: 'monitor result',
+      );
+    } on DioException catch (e) {
+      _throwDioError(e, fallbackMessage: 'Failed to trigger monitor');
     }
   }
 }
@@ -785,3 +1106,4 @@ if (sessionToken != null && sessionToken.trim().isNotEmpty) {
     handler.next(err);
   }
 }
+

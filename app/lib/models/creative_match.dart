@@ -1,45 +1,43 @@
-import 'dart:convert';
+// ═══════════════════════════════════════════════════════════════
+// CREATIVE MATCH MODEL
+// Maps to creative_scores D1 table
+// ═══════════════════════════════════════════════════════════════
 
 class CreativeMatch {
-  final String id;
-
+  final String  id;
   final String? adId;
   final String? creativeId;
   final String? campaignId;
   final String? adsetId;
   final String? audienceKey;
-
-  final String? creativeName;
+  final String  creativeName;
   final String? creativeType;
   final String? hookType;
   final String? angle;
   final String? productTag;
-
-  final double spend;
-  final double revenue;
-  final double roas;
-  final double ctr;
-  final int conversions;
-
-  final double matchScore;
-  final double fatigueScore;
-  final String status; // winner | test | fatiguing | loser
+  final double  spend;
+  final double  revenue;
+  final double  roas;
+  final double  ctr;
+  final int     conversions;
+  final double  matchScore;
+  final double  fatigueScore;
+  final String  status;         // winner / test_more / weak / stop
   final List<String> reasons;
-
   final DateTime createdAt;
 
   const CreativeMatch({
     required this.id,
-    required this.adId,
-    required this.creativeId,
-    required this.campaignId,
-    required this.adsetId,
-    required this.audienceKey,
+    this.adId,
+    this.creativeId,
+    this.campaignId,
+    this.adsetId,
+    this.audienceKey,
     required this.creativeName,
-    required this.creativeType,
-    required this.hookType,
-    required this.angle,
-    required this.productTag,
+    this.creativeType,
+    this.hookType,
+    this.angle,
+    this.productTag,
     required this.spend,
     required this.revenue,
     required this.roas,
@@ -52,116 +50,67 @@ class CreativeMatch {
     required this.createdAt,
   });
 
-  bool get isWinner => status == 'winner';
-  bool get isTest => status == 'test';
-  bool get isFatiguing => status == 'fatiguing';
-  bool get isLoser => status == 'loser';
+  // ── Getters ────────────────────────────────────────────────
+  bool get isWinner    => status == 'winner';
+  bool get isTestMore  => status == 'test_more';
+  bool get isWeak      => status == 'weak';
+  bool get isStop      => status == 'stop';
 
-  String get displayName => (creativeName?.trim().isNotEmpty ?? false)
-      ? creativeName!.trim()
-      : (creativeId ?? adId ?? 'Creative');
-
-  static double _d(dynamic v) {
-    if (v == null) return 0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString()) ?? 0;
+  // Fatigue label
+  String get fatigueLabel {
+    if (fatigueScore >= 75) return 'Burnt Out';
+    if (fatigueScore >= 50) return 'Fatiguing';
+    if (fatigueScore >= 25) return 'Stable';
+    return 'Fresh';
   }
 
-  static int _i(dynamic v) {
-    if (v == null) return 0;
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    return int.tryParse(v.toString()) ?? 0;
-  }
-
-  static DateTime _dt(dynamic v) {
-    if (v == null) return DateTime.fromMillisecondsSinceEpoch(0);
-    if (v is DateTime) return v;
-    return DateTime.tryParse(v.toString()) ??
-        DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  static List<String> _reasons(dynamic v) {
-    if (v == null) return const <String>[];
-    if (v is List) {
-      return v
-          .map((e) => e.toString())
-          .where((s) => s.trim().isNotEmpty)
-          .toList();
+  factory CreativeMatch.fromJson(Map<String, dynamic> j) {
+    List<String> parseReasons(dynamic raw) {
+      if (raw == null) return const [];
+      if (raw is List) return raw.map((e) => e.toString()).toList();
+      if (raw is String && raw.isNotEmpty) {
+        try {
+          if (raw.startsWith('[')) {
+            return raw
+                .substring(1, raw.length - 1)
+                .split(',')
+                .map((s) =>
+                    s.trim().replaceAll('"', '').replaceAll("'", ''))
+                .where((s) => s.isNotEmpty)
+                .toList();
+          }
+        } catch (_) {}
+        return [raw];
+      }
+      return const [];
     }
-    if (v is String) {
-      final s = v.trim();
-      if (s.isEmpty) return const <String>[];
 
-      try {
-        final decoded = jsonDecode(s);
-        if (decoded is List) {
-          return decoded
-              .map((e) => e.toString())
-              .where((x) => x.trim().isNotEmpty)
-              .toList();
-        }
-      } catch (_) {}
-
-      final lines = s
-          .split(RegExp(r'[\n•]+'))
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
-      return lines.isNotEmpty ? lines : <String>[s];
-    }
-    return <String>[v.toString()];
-  }
-
-  factory CreativeMatch.fromJson(Map<String, dynamic> json) {
     return CreativeMatch(
-      id: json['id']?.toString() ?? '',
-      adId: (json['adId'] ?? json['ad_id'])?.toString(),
-      creativeId: (json['creativeId'] ?? json['creative_id'])?.toString(),
-      campaignId: (json['campaignId'] ?? json['campaign_id'])?.toString(),
-      adsetId: (json['adsetId'] ?? json['adset_id'])?.toString(),
-      audienceKey: (json['audienceKey'] ?? json['audience_key'])?.toString(),
-      creativeName: (json['creativeName'] ?? json['creative_name'])?.toString(),
-      creativeType: (json['creativeType'] ?? json['creative_type'])?.toString(),
-      hookType: (json['hookType'] ?? json['hook_type'])?.toString(),
-      angle: json['angle']?.toString(),
-      productTag: (json['productTag'] ?? json['product_tag'])?.toString(),
-      spend: _d(json['spend']),
-      revenue: _d(json['revenue']),
-      roas: _d(json['roas']),
-      ctr: _d(json['ctr']),
-      conversions: _i(json['conversions']),
-      matchScore: _d(json['matchScore'] ?? json['match_score']),
-      fatigueScore: _d(json['fatigueScore'] ?? json['fatigue_score']),
-      status: (json['status']?.toString() ?? 'test').toLowerCase(),
-      reasons: _reasons(json['reasons']),
-      createdAt: _dt(json['createdAt'] ?? json['created_at']),
+      id:           j['id']?.toString()            ?? '',
+      adId:         j['ad_id']?.toString(),
+      creativeId:   j['creative_id']?.toString(),
+      campaignId:   j['campaign_id']?.toString(),
+      adsetId:      j['adset_id']?.toString(),
+      audienceKey:  j['audience_key']?.toString(),
+      creativeName: j['creative_name']?.toString() ??
+          j['campaign_id']?.toString() ?? 'Unknown Creative',
+      creativeType: j['creative_type']?.toString(),
+      hookType:     j['hook_type']?.toString(),
+      angle:        j['angle']?.toString(),
+      productTag:   j['product_tag']?.toString(),
+      spend:        (j['spend'] as num?)?.toDouble()        ?? 0,
+      revenue:      (j['revenue'] as num?)?.toDouble()      ?? 0,
+      roas:         (j['roas'] as num?)?.toDouble()         ?? 0,
+      ctr:          (j['ctr'] as num?)?.toDouble()          ?? 0,
+      conversions:  (j['conversions'] as num?)?.toInt()     ?? 0,
+      matchScore:   (j['match_score'] as num?)?.toDouble()  ?? 0,
+      fatigueScore: (j['fatigue_score'] as num?)?.toDouble() ?? 0,
+      status:       j['status']?.toString()                 ?? 'weak',
+      reasons:      parseReasons(j['reasons']),
+      createdAt:    DateTime.tryParse(
+                      j['created_at']?.toString() ?? '',
+                    ) ??
+                    DateTime.now(),
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'adId': adId,
-      'creativeId': creativeId,
-      'campaignId': campaignId,
-      'adsetId': adsetId,
-      'audienceKey': audienceKey,
-      'creativeName': creativeName,
-      'creativeType': creativeType,
-      'hookType': hookType,
-      'angle': angle,
-      'productTag': productTag,
-      'spend': spend,
-      'revenue': revenue,
-      'roas': roas,
-      'ctr': ctr,
-      'conversions': conversions,
-      'matchScore': matchScore,
-      'fatigueScore': fatigueScore,
-      'status': status,
-      'reasons': reasons,
-      'createdAt': createdAt.toIso8601String(),
-    };
   }
 }

@@ -1,22 +1,19 @@
-import 'dart:convert';
+// lib/models/optimization_recommendation.dart
 
 class OptimizationRecommendation {
   final String id;
   final String entityType;
   final String entityId;
-
-  final String priority; // low | medium | high | critical
-  final String actionType; // DecisionAction
+  final String priority;
+  final String actionType;
   final String title;
   final String description;
-
-  final double? score;
-  final String status; // open | applied | dismissed | resolved
-
+  final int? score;
+  final String status;
   final Map<String, dynamic>? payload;
   final DateTime createdAt;
 
-  const OptimizationRecommendation({
+  OptimizationRecommendation({
     required this.id,
     required this.entityType,
     required this.entityId,
@@ -24,79 +21,81 @@ class OptimizationRecommendation {
     required this.actionType,
     required this.title,
     required this.description,
-    required this.score,
+    this.score,
     required this.status,
-    required this.payload,
+    this.payload,
     required this.createdAt,
   });
-
-  bool get isCritical => priority == 'critical';
-  bool get isOpen => status == 'open';
-  bool get isActionable => isOpen;
-
-  static double? _dNullable(dynamic v) {
-    if (v == null) return null;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString());
-  }
-
-  static DateTime _dt(dynamic v) {
-    if (v == null) return DateTime.fromMillisecondsSinceEpoch(0);
-    if (v is DateTime) return v;
-    return DateTime.tryParse(v.toString()) ??
-        DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  static Map<String, dynamic>? _payload(dynamic v) {
-    if (v == null) return null;
-    if (v is Map<String, dynamic>) return v;
-    if (v is Map) return v.map((k, val) => MapEntry(k.toString(), val));
-    if (v is String) {
-      final s = v.trim();
-      if (s.isEmpty) return null;
-      try {
-        final decoded = jsonDecode(s);
-        if (decoded is Map) {
-          return decoded.map((k, val) => MapEntry(k.toString(), val));
-        }
-      } catch (_) {
-        return null;
-      }
-    }
-    return null;
-  }
 
   factory OptimizationRecommendation.fromJson(Map<String, dynamic> json) {
     return OptimizationRecommendation(
       id: json['id']?.toString() ?? '',
-      entityType: (json['entityType'] ?? json['entity_type'] ?? '').toString(),
-      entityId: (json['entityId'] ?? json['entity_id'] ?? '').toString(),
-      priority: (json['priority'] ?? 'medium').toString().toLowerCase(),
-      actionType: (json['actionType'] ?? json['action_type'] ?? 'hold')
-          .toString()
-          .toLowerCase(),
-      title: (json['title'] ?? '').toString(),
-      description: (json['description'] ?? '').toString(),
-      score: _dNullable(json['score']),
-      status: (json['status'] ?? 'open').toString().toLowerCase(),
-      payload: _payload(json['payload']),
-      createdAt: _dt(json['createdAt'] ?? json['created_at']),
+      entityType: json['entity_type']?.toString() ?? '',
+      entityId: json['entity_id']?.toString() ?? '',
+      priority: json['priority']?.toString() ?? 'medium',
+      actionType: json['action_type']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      description: json['description']?.toString() ?? '',
+      score: json['score'] as int?,
+      status: json['status']?.toString() ?? 'open',
+      payload: json['payload'] as Map<String, dynamic>?,
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ?? 
+          DateTime.now(),
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
       'id': id,
-      'entityType': entityType,
-      'entityId': entityId,
+      'entity_type': entityType,
+      'entity_id': entityId,
       'priority': priority,
-      'actionType': actionType,
+      'action_type': actionType,
       'title': title,
       'description': description,
       'score': score,
       'status': status,
       'payload': payload,
-      'createdAt': createdAt.toIso8601String(),
+      'created_at': createdAt.toIso8601String(),
     };
+  }
+
+  bool get isCritical => priority == 'critical';
+  bool get isHigh => priority == 'high';
+  bool get isMedium => priority == 'medium';
+  bool get isLow => priority == 'low';
+  
+  bool get isOpen => status == 'open';
+  bool get isApplied => status == 'applied';
+  bool get isDismissed => status == 'dismissed';
+  
+  bool get isActionable => isOpen && actionType.isNotEmpty;
+
+  OptimizationRecommendation copyWith({
+    String? id,
+    String? entityType,
+    String? entityId,
+    String? priority,
+    String? actionType,
+    String? title,
+    String? description,
+    int? score,
+    String? status,
+    Map<String, dynamic>? payload,
+    DateTime? createdAt,
+  }) {
+    return OptimizationRecommendation(
+      id: id ?? this.id,
+      entityType: entityType ?? this.entityType,
+      entityId: entityId ?? this.entityId,
+      priority: priority ?? this.priority,
+      actionType: actionType ?? this.actionType,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      score: score ?? this.score,
+      status: status ?? this.status,
+      payload: payload ?? this.payload,
+      createdAt: createdAt ?? this.createdAt,
+    );
   }
 }

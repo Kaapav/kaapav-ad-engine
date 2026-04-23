@@ -1,383 +1,269 @@
-import type { Bindings, IntelligenceSummary } from '../types';
-import * as MetaApi from './meta-api';
-import { notify } from './fcm';
+// ═══════════════════════════════════════════════════════════════
+// INTELLIGENCE ORCHESTRATOR
+// Runs all 4 Phase 1 engines in sequence and persists results.
+// Called by: cron 0 */6 * * * AND POST /api/intelligence/recompute
+// ═══════════════════════════════════════════════════════════════
 
-export type BootstrapOptions = {
+import type { AppEnv } from '../types';
+import { runBuyerEngine }    from './buyer-engine';
+import { runAudienceEngine } from './audience-engine';
+import { runCreativeEngine } from './creative-engine';
+import { runFatigueEngine }  from './fatigue-engine';
+import { notify }            from './fcm';
+import { runScaleEngine }          from './scale-engine';
+import { runRefundAdjustedRoas }   from './refund-roas';
+import { runGeoEngine }            from './geo-engine';
+import { runResponseSpeedEngine }  from './response-speed';
+import { runRealtimeMonitor }      from './realtime-monitor';
+
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+
+export type OrchestratorOptions = {
   source: 'manual' | 'cron_6h' | 'daily_report';
   notifyCritical?: boolean;
 };
 
-export async function runIntelligenceBootstrap(
-  env: Bindings,
-  options: BootstrapOptions,
-): Promise<{
-  ok: true;
+export type OrchestratorResult = {
+  ok: boolean;
   source: string;
-  snapshotsSaved: number;
-  recommendationsUpserted: number;
-  summary: IntelligenceSummary;
-}> {
-  const raw = await MetaApi.getCampaigns(env, 'last_7d', 50);
-
-  const campaigns = raw.map((mc) => {
-    const parsed = MetaApi.parseInsights(mc.insights?.data || []) as Record<
-      string,
-      any
-    >;
-
-    return {
-      id: mc.id,
-      name: mc.name,
-      objective: mc.objective,
-      status: mc.effective_status || mc.status,
-      spend: Number(parsed.spend ?? 0),
-      revenue: Number(parsed.revenue ?? 0),
-      roas: Number(parsed.roas ?? 0),
-      cpa: Number(parsed.cpa ?? 0),
-      ctr: Number(parsed.ctr ?? 0),
-      cpc: Number(parsed.cpc ?? 0),
-      cpm: Number(parsed.cpm ?? 0),
-      frequency: Number(parsed.frequency ?? 0),
-      leads: Number(parsed.leads ?? 0),
-      conversions: Number(parsed.conversions ?? 0),
+  durationMs: number;
+  engines: {
+    buyer: { processed: number; upserted: number };
+    audience: { processed: number; upserted: number };
+    creative: { processed: number; upserted: number };
+    fatigue: {
+      processed: number;
+      fatiguing: number;
+      burntOut: number;
+      recommendationsCreated: number;
     };
-  });
+  };
+  criticalAlerts: number;
+};
 
-  await persistCampaignSnapshots(env, campaigns);
+// ─────────────────────────────────────────────
+// Main Orchestrator
+// ─────────────────────────────────────────────
 
-  const activeRecommendationIds = new Set<string>();
-  let recommendationsUpserted = 0;
+export async function runIntelligenceOrchestrator(
+  env: AppEnv['Bindings'],
+  options: OrchestratorOptions,
+): Promise<OrchestratorResult> {
+  const startTime = Date.now();
 
-  for (const campaign of campaigns) {
-    // Scale candidate
-    if (campaign.roas >= 4 && campaign.spend >= 1500) {
-      const id = `bootstrap:scale:${campaign.id}`;
-      activeRecommendationIds.add(id);
+  console.log(
+    `[Intelligence] Starting full recompute. Source: ${options.source}`,
+  );
 
-      await upsertRecommendation(env, {
-        id,
-        entityType: 'campaign',
-        entityId: campaign.id,
-        priority: campaign.roas >= 5 ? 'high' : 'medium',
-        actionType: 'scale_budget',
-        title: `Scale ${campaign.name} by 15%`,
-        description:
-          `Strong ROAS (${campaign.roas.toFixed(2)}x)` +
-          `${campaign.frequency > 0 ? `, frequency ${campaign.frequency.toFixed(2)}x` : ''}` +
-          `, and spend ₹${Math.round(campaign.spend)} indicate a scalable winner.`,
-        score: Math.min(100, Math.round(campaign.roas * 18)),
-        payload: {
-          source: 'bootstrap',
-          budgetDeltaPercent: 15,
-          campaignId: campaign.id,
-        },
-      });
-
-      recommendationsUpserted++;
-    }
-
-    // Pause / reduce candidate
-    if (campaign.roas > 0 && campaign.roas < 2 && campaign.spend >= 1000) {
-      const id = `bootstrap:pause:${campaign.id}`;
-      activeRecommendationIds.add(id);
-
-      await upsertRecommendation(env, {
-        id,
-        entityType: 'campaign',
-        entityId: campaign.id,
-        priority: campaign.roas < 1.5 ? 'critical' : 'high',
-        actionType: 'pause',
-        title: `Pause or cut spend for ${campaign.name}`,
-        description:
-          `ROAS is only ${campaign.roas.toFixed(2)}x after spend ₹${Math.round(campaign.spend)}.` +
-          ` This campaign looks inefficient and should be reviewed immediately.`,
-        score: Math.max(1, 100 - Math.round(campaign.roas * 30)),
-        payload: {
-          source: 'bootstrap',
-          campaignId: campaign.id,
-          suggestedAction: 'pause_or_reduce',
-        },
-      });
-
-      recommendationsUpserted++;
-    }
-
-    // Fatigue candidate
-    if (campaign.frequency >= 3.5) {
-      const id = `bootstrap:fatigue:${campaign.id}`;
-      activeRecommendationIds.add(id);
-
-      await upsertRecommendation(env, {
-        id,
-        entityType: 'campaign',
-        entityId: campaign.id,
-        priority: campaign.frequency >= 4.5 ? 'critical' : 'high',
-        actionType: 'rotate_creative',
-        title: `Rotate creative for ${campaign.name}`,
-        description:
-          `Frequency is ${campaign.frequency.toFixed(2)}x, which suggests rising audience fatigue.` +
-          ` Rotate creatives or narrow delivery before performance drops further.`,
-        score: Math.min(100, Math.round(campaign.frequency * 20)),
-        payload: {
-          source: 'bootstrap',
-          campaignId: campaign.id,
-          reason: 'fatigue',
-        },
-      });
-
-      recommendationsUpserted++;
-    }
+  // ── Phase 1: Step 1 — Buyer Engine ───────────────────────────
+  let buyerResult = { processed: 0, upserted: 0 };
+  try {
+    buyerResult = await runBuyerEngine(env);
+    console.log(
+      `[Buyer] processed=${buyerResult.processed} upserted=${buyerResult.upserted}`,
+    );
+  } catch (err) {
+    console.error('[Buyer Engine] Failed:', err);
   }
 
-  await resolveStaleBootstrapRecommendations(env, [...activeRecommendationIds]);
+  // ── Phase 1: Step 2 — Audience Engine ────────────────────────
+  let audienceResult = { processed: 0, upserted: 0 };
+  try {
+    audienceResult = await runAudienceEngine(env);
+    console.log(
+      `[Audience] processed=${audienceResult.processed} upserted=${audienceResult.upserted}`,
+    );
+  } catch (err) {
+    console.error('[Audience Engine] Failed:', err);
+  }
 
-  const summary = await getIntelligenceSummary(env);
+  // ── Phase 1: Step 3 — Creative Engine ────────────────────────
+  // Needs audience scores → runs after Step 2
+  let creativeResult = { processed: 0, upserted: 0 };
+  try {
+    creativeResult = await runCreativeEngine(env);
+    console.log(
+      `[Creative] processed=${creativeResult.processed} upserted=${creativeResult.upserted}`,
+    );
+  } catch (err) {
+    console.error('[Creative Engine] Failed:', err);
+  }
+
+  // ── Phase 1: Step 4 — Fatigue Engine ─────────────────────────
+  // Needs creative scores → runs after Step 3
+  let fatigueResult = {
+    processed: 0,
+    fatiguing: 0,
+    burntOut: 0,
+    recommendationsCreated: 0,
+  };
+  try {
+    fatigueResult = await runFatigueEngine(env);
+    console.log(
+      `[Fatigue] processed=${fatigueResult.processed} ` +
+        `fatiguing=${fatigueResult.fatiguing} burntOut=${fatigueResult.burntOut}`,
+    );
+  } catch (err) {
+    console.error('[Fatigue Engine] Failed:', err);
+  }
+
+  // ── Phase 2: Step 5 — Refund-Adjusted ROAS ───────────────────
+  // Runs before Scale Engine so true ROAS is available
+  let refundResult = {
+    processed: 0,
+    upserted: 0,
+    totalRefundedRevenue: 0,
+    avgRoasDelta: 0,
+  };
+  try {
+    refundResult = await runRefundAdjustedRoas(env);
+    console.log(
+      `[Refund ROAS] processed=${refundResult.processed} ` +
+        `refunded=₹${refundResult.totalRefundedRevenue} ` +
+        `avgDelta=${refundResult.avgRoasDelta}`,
+    );
+  } catch (err) {
+    console.error('[Refund ROAS Engine] Failed:', err);
+  }
+
+  // ── Phase 2: Step 6 — Scale Decision Engine ──────────────────
+  // Uses ALL Phase 1 outputs + refund ROAS → runs last
+  let scaleResult = {
+    processed: 0,
+    decisionsGenerated: 0,
+    scaleCount: 0,
+    pauseCount: 0,
+    reduceCount: 0,
+    rotateCount: 0,
+  };
+  try {
+    scaleResult = await runScaleEngine(env);
+    console.log(
+      `[Scale] decisions=${scaleResult.decisionsGenerated} ` +
+        `scale=${scaleResult.scaleCount} pause=${scaleResult.pauseCount} ` +
+        `reduce=${scaleResult.reduceCount} rotate=${scaleResult.rotateCount}`,
+    );
+  } catch (err) {
+    console.error('[Scale Engine] Failed:', err);
+  }
+
+  // ── Phase 4: Step 7 — Geo Engine ─────────────────────────────
+  let geoResult = {
+    processed: 0, upserted: 0,
+    hotGeos: 0, suppressGeos: 0,
+  };
+  try {
+    geoResult = await runGeoEngine(env);
+    console.log(
+      `[Geo] processed=${geoResult.processed} ` +
+      `hot=${geoResult.hotGeos} suppress=${geoResult.suppressGeos}`,
+    );
+  } catch (err) {
+    console.error('[Geo Engine] Failed:', err);
+  }
+
+  // ── Phase 4: Step 8 — Response Speed ─────────────────────────
+  let responseResult = {
+    processed: 0, unreplied: 0, insights: [], alertsSent: 0,
+  };
+  try {
+    responseResult = await runResponseSpeedEngine(env);
+    console.log(
+      `[Response Speed] unreplied=${responseResult.unreplied} ` +
+      `alerts=${responseResult.alertsSent}`,
+    );
+  } catch (err) {
+    console.error('[Response Speed Engine] Failed:', err);
+  }
+
+  // ── Phase 4: Step 9 — Real-Time Monitor ──────────────────────
+  let monitorResult = {
+    checksRun: 0, alertsFired: 0, alerts: [],
+  };
+  try {
+    monitorResult = await runRealtimeMonitor(env);
+    console.log(
+      `[Monitor] checks=${monitorResult.checksRun} ` +
+      `alerts=${monitorResult.alertsFired}`,
+    );
+  } catch (err) {
+    console.error('[Realtime Monitor] Failed:', err);
+  }
+
+  // ── Activity Log ──────────────────────────────────────────────
+  const durationMs = Date.now() - startTime;
 
   await env.DB.prepare(
-    'INSERT INTO activity_log (id, type, title, description) VALUES (?, ?, ?, ?)',
+    `INSERT INTO activity_log (id, type, title, description, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
   )
     .bind(
       crypto.randomUUID(),
       'intelligence',
-      'Intelligence bootstrap recomputed',
-      `Source: ${options.source}, Snapshots: ${campaigns.length}, Recommendations: ${recommendationsUpserted}`,
+      'Full Intelligence Recompute (Phase 1 + 2)',
+      `Source: ${options.source} | ` +
+        `Buyers: ${buyerResult.upserted} | ` +
+        `Audiences: ${audienceResult.upserted} | ` +
+        `Creatives: ${creativeResult.upserted} | ` +
+        `Fatigue Recs: ${fatigueResult.recommendationsCreated} | ` +
+        `Refund-ROAS: ${refundResult.upserted} (₹${refundResult.totalRefundedRevenue} refunded) | ` +
+        `Scale Decisions: ${scaleResult.decisionsGenerated} | ` +
+        `Duration: ${durationMs}ms`,
+      new Date().toISOString(),
     )
     .run();
 
+  // ── Critical Alert Notification ───────────────────────────────
+  let criticalAlerts = 0;
+
   if (options.notifyCritical) {
-    const critical = await env.DB.prepare(
-      `SELECT COUNT(*) as count
-       FROM optimization_recommendations
-       WHERE status = 'open' AND priority = 'critical'`,
-    ).first<{ count: number }>();
+    try {
+      const critical = await env.DB.prepare(
+        `SELECT COUNT(*) as count
+         FROM optimization_recommendations
+         WHERE status = 'open' AND priority = 'critical'`,
+      ).first<{ count: number }>();
 
-    const criticalCount = Number(critical?.count ?? 0);
+      criticalAlerts = Number(critical?.count ?? 0);
 
-    if (criticalCount > 0) {
-await notify(
-  env,
-  'alert',
-  '⚠️ Critical Optimization Alerts',
-  `${criticalCount} critical recommendation(s) need attention`,
-  {
-    type: 'intelligence_alert',
-    criticalCount: String(criticalCount),
-  },
-);
+      if (criticalAlerts > 0) {
+        const msg =
+          `${criticalAlerts} critical alert(s): ` +
+          `${scaleResult.pauseCount} to pause, ` +
+          `${fatigueResult.burntOut} burnt out, ` +
+          `refunded ₹${refundResult.totalRefundedRevenue}`;
+
+        await notify(
+          env,
+          'alert',
+          '⚠️ Critical Intelligence Alerts',
+          msg,
+          {
+            type: 'intelligence_critical',
+            criticalCount: String(criticalAlerts),
+            pauseCount: String(scaleResult.pauseCount),
+            burntOut: String(fatigueResult.burntOut),
+            refundedRevenue: String(refundResult.totalRefundedRevenue),
+          },
+        );
+      }
+    } catch (err) {
+      console.error('[Orchestrator] FCM notify failed:', err);
     }
   }
 
   return {
     ok: true,
     source: options.source,
-    snapshotsSaved: campaigns.length,
-    recommendationsUpserted,
-    summary,
-  };
-}
-
-export async function persistCampaignSnapshots(
-  env: Bindings,
-  campaigns: Array<{
-    id: string;
-    name: string;
-    objective?: string;
-    status?: string;
-    spend?: number;
-    revenue?: number;
-    roas?: number;
-    cpa?: number;
-    ctr?: number;
-    cpc?: number;
-    cpm?: number;
-    frequency?: number;
-    conversions?: number;
-    leads?: number;
-  }>,
-): Promise<void> {
-  const snapshotDate = new Date().toISOString();
-
-  for (const campaign of campaigns) {
-    await env.DB.prepare(
-      `INSERT INTO performance_snapshots (
-        id, entity_type, entity_id, snapshot_date,
-        spend, revenue, roas, cpa, ctr, cpc, cpm, frequency, conversions, extra, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-      .bind(
-        crypto.randomUUID(),
-        'campaign',
-        campaign.id,
-        snapshotDate,
-        Number(campaign.spend ?? 0),
-        Number(campaign.revenue ?? 0),
-        Number(campaign.roas ?? 0),
-        Number(campaign.cpa ?? 0),
-        Number(campaign.ctr ?? 0),
-        Number(campaign.cpc ?? 0),
-        Number(campaign.cpm ?? 0),
-        Number(campaign.frequency ?? 0),
-        Number(campaign.conversions ?? 0),
-        JSON.stringify({
-          name: campaign.name,
-          objective: campaign.objective,
-          status: campaign.status,
-          leads: campaign.leads ?? 0,
-        }),
-        snapshotDate,
-      )
-      .run();
-  }
-}
-
-async function upsertRecommendation(
-  env: Bindings,
-  input: {
-    id: string;
-    entityType: string;
-    entityId: string;
-    priority: 'low' | 'medium' | 'high' | 'critical';
-    actionType:
-      | 'scale_budget'
-      | 'hold'
-      | 'reduce_budget'
-      | 'pause'
-      | 'rotate_creative'
-      | 'retarget'
-      | 'duplicate';
-    title: string;
-    description: string;
-    score: number;
-    payload?: Record<string, unknown>;
-  },
-): Promise<void> {
-  const now = new Date().toISOString();
-
-  await env.DB.prepare(
-    `INSERT INTO optimization_recommendations (
-      id, entity_type, entity_id, priority, action_type,
-      title, description, score, status, payload, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      entity_type = excluded.entity_type,
-      entity_id = excluded.entity_id,
-      priority = excluded.priority,
-      action_type = excluded.action_type,
-      title = excluded.title,
-      description = excluded.description,
-      score = excluded.score,
-      status = 'open',
-      payload = excluded.payload
-    `,
-  )
-    .bind(
-      input.id,
-      input.entityType,
-      input.entityId,
-      input.priority,
-      input.actionType,
-      input.title,
-      input.description,
-      input.score,
-      'open',
-      JSON.stringify(input.payload ?? {}),
-      now,
-    )
-    .run();
-}
-
-async function resolveStaleBootstrapRecommendations(
-  env: Bindings,
-  activeIds: string[],
-): Promise<void> {
-  const existing = await env.DB.prepare(
-    `SELECT id
-     FROM optimization_recommendations
-     WHERE id LIKE 'bootstrap:%' AND status = 'open'`,
-  ).all<{ id: string }>();
-
-  const rows = existing.results ?? [];
-
-  for (const row of rows) {
-    if (!activeIds.includes(row.id)) {
-      await env.DB.prepare(
-        `UPDATE optimization_recommendations
-         SET status = 'resolved'
-         WHERE id = ?`,
-      )
-        .bind(row.id)
-        .run();
-    }
-  }
-}
-
-export async function getIntelligenceSummary(
-  env: Bindings,
-): Promise<IntelligenceSummary> {
-  const avgAudience = await env.DB.prepare(
-    `SELECT COALESCE(ROUND(AVG(intent_score), 2), 0) as value
-     FROM audience_scores`,
-  ).first<{ value: number }>();
-
-  const avgCreative = await env.DB.prepare(
-    `SELECT COALESCE(ROUND(AVG(match_score), 2), 0) as value
-     FROM creative_scores`,
-  ).first<{ value: number }>();
-
-  const topBuyerCount = await env.DB.prepare(
-    `SELECT COUNT(*) as count
-     FROM buyer_scores
-     WHERE buyer_tier IN ('platinum', 'gold')`,
-  ).first<{ count: number }>();
-
-  const fatigueAlerts = await env.DB.prepare(
-    `SELECT COUNT(*) as count
-     FROM creative_scores
-     WHERE fatigue_score >= 50`,
-  ).first<{ count: number }>();
-
-  const openRecommendations = await env.DB.prepare(
-    `SELECT COUNT(*) as count
-     FROM optimization_recommendations
-     WHERE status = 'open'`,
-  ).first<{ count: number }>();
-
-  const scalableCampaigns = await env.DB.prepare(
-    `SELECT entity_id as id, title, COALESCE(score, 0) as score
-     FROM optimization_recommendations
-     WHERE status = 'open' AND action_type = 'scale_budget'
-     ORDER BY COALESCE(score, 0) DESC
-     LIMIT 3`,
-  ).all<{ id: string; title: string; score: number }>();
-
-  const hotAudiences = await env.DB.prepare(
-    `SELECT audience_key as key,
-            COALESCE(audience_name, audience_key) as name,
-            COALESCE(intent_score, 0) as score
-     FROM audience_scores
-     ORDER BY COALESCE(intent_score, 0) DESC
-     LIMIT 3`,
-  ).all<{ key: string; name: string; score: number }>();
-
-  const seedBuyers = await env.DB.prepare(
-    `SELECT phone,
-            COALESCE(customer_name, phone) as name,
-            COALESCE(buyer_quality_score, 0) as score
-     FROM buyer_scores
-     WHERE lookalike_seed_eligible = 1
-     ORDER BY COALESCE(buyer_quality_score, 0) DESC
-     LIMIT 3`,
-  ).all<{ phone: string; name: string; score: number }>();
-
-  return {
-    avgAudienceScore: Number(avgAudience?.value ?? 0),
-    avgCreativeMatchScore: Number(avgCreative?.value ?? 0),
-    topBuyerCount: Number(topBuyerCount?.count ?? 0),
-    fatigueAlerts: Number(fatigueAlerts?.count ?? 0),
-    openRecommendations: Number(openRecommendations?.count ?? 0),
-    topScalableCampaigns: scalableCampaigns.results ?? [],
-    topHotAudiences: hotAudiences.results ?? [],
-    topSeedBuyers: seedBuyers.results ?? [],
+    durationMs,
+    engines: {
+      buyer:    buyerResult,
+      audience: audienceResult,
+      creative: creativeResult,
+      fatigue:  fatigueResult,
+    },
+    criticalAlerts,
   };
 }

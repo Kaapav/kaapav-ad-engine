@@ -1,341 +1,252 @@
-import 'package:dio/dio.dart';
+// ═══════════════════════════════════════════════════════════════
+// INTELLIGENCE PROVIDERS
+// All intelligence data from Worker → Flutter
+// ═══════════════════════════════════════════════════════════════
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:kaapav_ad_engine/core/env_config.dart';
-import 'package:kaapav_ad_engine/models/audience_score.dart';
-import 'package:kaapav_ad_engine/models/buyer_quality.dart';
-import 'package:kaapav_ad_engine/models/creative_match.dart';
-import 'package:kaapav_ad_engine/models/intelligence_summary.dart';
-import 'package:kaapav_ad_engine/models/optimization_recommendation.dart';
-import 'package:kaapav_ad_engine/services/meta_auth.dart';
 
-typedef JsonMap = Map<String, dynamic>;
+import '../models/audience_score.dart';
+import '../models/buyer_quality.dart';
+import '../models/creative_match.dart';
+import '../models/intelligence_summary.dart';
+import '../models/optimization_recommendation.dart';
+import '../services/worker_api.dart';
+import 'app_providers.dart';
 
-class IntelligenceQuery {
-  final String? datePreset;
+
+// ─────────────────────────────────────────────
+// Query classes (typed filters)
+// ─────────────────────────────────────────────
+
+class AudienceQuery {
   final String? status;
   final String? campaignId;
-  final String? adsetId;
-  final String? audienceKey;
+  final int limit;
 
-  const IntelligenceQuery({
-    this.datePreset,
+  const AudienceQuery({
     this.status,
     this.campaignId,
-    this.adsetId,
-    this.audienceKey,
+    this.limit = 100,
   });
 
-  Map<String, dynamic> toParams() {
-    final p = <String, dynamic>{};
-    if (datePreset != null) p['date_preset'] = datePreset;
-    if (status != null) p['status'] = status;
-    if (campaignId != null) p['campaign_id'] = campaignId;
-    if (adsetId != null) p['adset_id'] = adsetId;
-    if (audienceKey != null) p['audience_key'] = audienceKey;
-    return p;
-  }
+  @override
+  bool operator ==(Object other) =>
+      other is AudienceQuery &&
+      other.status == status &&
+      other.campaignId == campaignId &&
+      other.limit == limit;
+
+  @override
+  int get hashCode =>
+      Object.hash(status, campaignId, limit);
+}
+
+class CreativeQuery {
+  final String? status;
+  final String? campaignId;
+  final String? audienceKey;
+  final int limit;
+
+  const CreativeQuery({
+    this.status,
+    this.campaignId,
+    this.audienceKey,
+    this.limit = 100,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is CreativeQuery &&
+      other.status == status &&
+      other.campaignId == campaignId &&
+      other.audienceKey == audienceKey &&
+      other.limit == limit;
+
+  @override
+  int get hashCode =>
+      Object.hash(status, campaignId, audienceKey, limit);
 }
 
 class BuyerQuery {
   final String? tier;
-  final bool? lookalikeSeedEligible;
-  final String? productAffinity;
+  final bool?   seedOnly;
+  final String? affinity;
+  final int limit;
 
   const BuyerQuery({
     this.tier,
-    this.lookalikeSeedEligible,
-    this.productAffinity,
+    this.seedOnly,
+    this.affinity,
+    this.limit = 100,
   });
 
-  Map<String, dynamic> toParams() {
-    final p = <String, dynamic>{};
-    if (tier != null) p['tier'] = tier;
-    if (lookalikeSeedEligible != null) {
-      p['lookalike_seed_eligible'] = lookalikeSeedEligible! ? '1' : '0';
-    }
-    if (productAffinity != null) p['product_affinity'] = productAffinity;
-    return p;
-  }
+  @override
+  bool operator ==(Object other) =>
+      other is BuyerQuery &&
+      other.tier == tier &&
+      other.seedOnly == seedOnly &&
+      other.affinity == affinity &&
+      other.limit == limit;
+
+  @override
+  int get hashCode =>
+      Object.hash(tier, seedOnly, affinity, limit);
 }
 
 class RecommendationQuery {
   final String? status;
   final String? priority;
+  final int limit;
 
-  const RecommendationQuery({this.status, this.priority});
+  const RecommendationQuery({
+    this.status,
+    this.priority,
+    this.limit = 100,
+  });
 
-  Map<String, dynamic> toParams() {
-    final p = <String, dynamic>{};
-    if (status != null) p['status'] = status;
-    if (priority != null) p['priority'] = priority;
-    return p;
-  }
-}
+  @override
+  bool operator ==(Object other) =>
+      other is RecommendationQuery &&
+      other.status == status &&
+      other.priority == priority &&
+      other.limit == limit;
 
-class WorkerIntelligenceApi {
-  final Dio _dio;
-  final MetaAuth _auth;
-
-  WorkerIntelligenceApi(this._dio, this._auth);
-
-  Future<Map<String, String>> _headers() async {
-    final apiKey = await _auth.getApiKey();
-    final session = await _auth.getSessionToken();
-
-    final h = <String, String>{'Content-Type': 'application/json'};
-
-    // Rule: prefer API key if present, else session
-    if (apiKey != null && apiKey.trim().isNotEmpty) {
-      h['X-API-Key'] = apiKey.trim();
-      return h;
-    }
-
-    if (session != null && session.trim().isNotEmpty) {
-      h['Authorization'] = 'Bearer ${session.trim()}';
-      return h;
-    }
-
-    // Not authenticated
-    throw Exception('Not authenticated. Please connect to Worker first.');
-  }
-
-  Never _throwUserFacing(String message) {
-    throw Exception(message);
-  }
-
-  String _extractError(dynamic data) {
-    if (data is Map) {
-      final err = data['error'];
-      if (err != null) return err.toString();
-    }
-    return 'Request failed';
-  }
-
-  Future<JsonMap> _get(
-    String path, {
-    Map<String, dynamic>? queryParameters,
-  }) async {
-    try {
-      final res = await _dio.get(
-        path,
-        queryParameters: queryParameters,
-        options: Options(headers: await _headers()),
-      );
-
-      final data = res.data;
-      if (data is Map<String, dynamic>) return data;
-      _throwUserFacing('Unexpected response from server.');
-    } on DioException catch (e) {
-      final code = e.response?.statusCode;
-      if (code == 404) {
-        _throwUserFacing('Worker endpoint not implemented yet: $path');
-      }
-      _throwUserFacing(_extractError(e.response?.data));
-    } catch (_) {
-      _throwUserFacing('Request failed.');
-    }
-  }
-
-  Future<JsonMap> _post(
-    String path, {
-    Object? body,
-    Map<String, dynamic>? params,
-  }) async {
-    try {
-      final res = await _dio.post(
-        path,
-        data: body,
-        queryParameters: params,
-        options: Options(headers: await _headers()),
-      );
-
-      final data = res.data;
-      if (data is Map<String, dynamic>) return data;
-      _throwUserFacing('Unexpected response from server.');
-    } on DioException catch (e) {
-      final code = e.response?.statusCode;
-      if (code == 404) {
-        _throwUserFacing('Worker endpoint not implemented yet: $path');
-      }
-      _throwUserFacing(_extractError(e.response?.data));
-    } catch (_) {
-      _throwUserFacing('Request failed.');
-    }
-  }
-
-  Future<IntelligenceSummary> getSummary() async {
-    final json = await _get('/api/intelligence/summary');
-    if (json['success'] != true) {
-      _throwUserFacing(json['error']?.toString() ?? 'Failed to load summary.');
-    }
-    final data = (json['data'] as Map).map((k, v) => MapEntry(k.toString(), v));
-    return IntelligenceSummary.fromJson(data);
-  }
-
-  Future<Map<String, dynamic>> recompute() async {
-    final json = await _post('/api/intelligence/recompute');
-    if (json['success'] != true) {
-      _throwUserFacing(json['error']?.toString() ?? 'Recompute failed.');
-    }
-    return (json['data'] as Map?)?.map((k, v) => MapEntry(k.toString(), v)) ??
-        <String, dynamic>{};
-  }
-
-  Future<List<AudienceScore>> getAudiences(IntelligenceQuery q) async {
-    final json = await _get(
-      '/api/intelligence/audiences',
-      queryParameters: q.toParams(),
-    );
-    if (json['success'] != true) {
-      _throwUserFacing(json['error']?.toString() ?? 'Failed to load audiences.');
-    }
-    final list = (json['data'] as List? ?? const []);
-    return list
-        .map((e) => AudienceScore.fromJson(
-              (e as Map).map((k, v) => MapEntry(k.toString(), v)),
-            ))
-        .toList();
-  }
-
-  Future<List<CreativeMatch>> getCreatives(IntelligenceQuery q) async {
-    final json = await _get(
-      '/api/intelligence/creatives',
-      queryParameters: q.toParams(),
-    );
-    if (json['success'] != true) {
-      _throwUserFacing(json['error']?.toString() ?? 'Failed to load creatives.');
-    }
-    final list = (json['data'] as List? ?? const []);
-    return list
-        .map((e) => CreativeMatch.fromJson(
-              (e as Map).map((k, v) => MapEntry(k.toString(), v)),
-            ))
-        .toList();
-  }
-
-  Future<List<BuyerQuality>> getBuyers(BuyerQuery q) async {
-    final json = await _get(
-      '/api/intelligence/buyers',
-      queryParameters: q.toParams(),
-    );
-    if (json['success'] != true) {
-      _throwUserFacing(json['error']?.toString() ?? 'Failed to load buyers.');
-    }
-    final list = (json['data'] as List? ?? const []);
-    return list
-        .map((e) => BuyerQuality.fromJson(
-              (e as Map).map((k, v) => MapEntry(k.toString(), v)),
-            ))
-        .toList();
-  }
-
-  Future<List<OptimizationRecommendation>> getRecommendations(
-    RecommendationQuery q,
-  ) async {
-    final json = await _get(
-      '/api/intelligence/recommendations',
-      queryParameters: q.toParams(),
-    );
-    if (json['success'] != true) {
-      _throwUserFacing(
-        json['error']?.toString() ?? 'Failed to load recommendations.',
-      );
-    }
-    final list = (json['data'] as List? ?? const []);
-    return list
-        .map((e) => OptimizationRecommendation.fromJson(
-              (e as Map).map((k, v) => MapEntry(k.toString(), v)),
-            ))
-        .toList();
-  }
-
-  Future<void> applyRecommendation(String id) async {
-    final json = await _post('/api/intelligence/recommendations/$id/apply');
-    if (json['success'] != true) {
-      _throwUserFacing(
-        json['error']?.toString() ?? 'Failed to apply recommendation.',
-      );
-    }
-  }
-
-  Future<void> dismissRecommendation(String id) async {
-    final json = await _post('/api/intelligence/recommendations/$id/dismiss');
-    if (json['success'] != true) {
-      _throwUserFacing(
-        json['error']?.toString() ?? 'Failed to dismiss recommendation.',
-      );
-    }
-  }
+  @override
+  int get hashCode =>
+      Object.hash(status, priority, limit);
 }
 
 // ─────────────────────────────────────────────
-// Providers
+// Intelligence Summary (top-level)
 // ─────────────────────────────────────────────
 
-final _dioProvider = Provider<Dio>((ref) {
-  return Dio(
-    BaseOptions(
-      baseUrl: EnvConfig.workerBaseUrl,
-      connectTimeout: const Duration(seconds: 20),
-      receiveTimeout: const Duration(seconds: 30),
-    ),
+final intelligenceSummaryProvider =
+    FutureProvider<IntelligenceSummary>((ref) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getIntelligenceSummary();
+});
+
+// ─────────────────────────────────────────────
+// Audience Scores
+// ─────────────────────────────────────────────
+
+final audienceScoresProvider =
+    FutureProvider.family<List<AudienceScore>, AudienceQuery>(
+        (ref, query) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getAudienceScores(
+    status:     query.status,
+    campaignId: query.campaignId,
+    limit:      query.limit,
   );
 });
 
-final intelligenceApiProvider = Provider<WorkerIntelligenceApi>((ref) {
-  final dio = ref.watch(_dioProvider);
-  return WorkerIntelligenceApi(dio, MetaAuth());
-});
-
-final intelligenceSummaryProvider = FutureProvider<IntelligenceSummary>((ref) {
-  return ref.watch(intelligenceApiProvider).getSummary();
-});
-
-final audienceScoresProvider =
-    FutureProvider.family<List<AudienceScore>, IntelligenceQuery>((ref, q) {
-  return ref.watch(intelligenceApiProvider).getAudiences(q);
-});
+// ─────────────────────────────────────────────
+// Creative Matches
+// ─────────────────────────────────────────────
 
 final creativeMatchesProvider =
-    FutureProvider.family<List<CreativeMatch>, IntelligenceQuery>((ref, q) {
-  return ref.watch(intelligenceApiProvider).getCreatives(q);
+    FutureProvider.family<List<CreativeMatch>, CreativeQuery>(
+        (ref, query) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getCreativeMatches(
+    status:      query.status,
+    campaignId:  query.campaignId,
+    audienceKey: query.audienceKey,
+    limit:       query.limit,
+  );
 });
+
+// ─────────────────────────────────────────────
+// Buyer Quality
+// ─────────────────────────────────────────────
 
 final buyerQualityProvider =
-    FutureProvider.family<List<BuyerQuality>, BuyerQuery>((ref, q) {
-  return ref.watch(intelligenceApiProvider).getBuyers(q);
+    FutureProvider.family<List<BuyerQuality>, BuyerQuery>(
+        (ref, query) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getBuyerQuality(
+    tier:     query.tier,
+    lookalikeSeedEligible:  query.seedOnly,   
+    productAffinity:        query.affinity,
+    limit:    query.limit,
+  );
 });
+
+// ─────────────────────────────────────────────
+// Recommendations
+// ─────────────────────────────────────────────
 
 final recommendationsProvider = FutureProvider.family<
-    List<OptimizationRecommendation>, RecommendationQuery>((ref, q) {
-  return ref.watch(intelligenceApiProvider).getRecommendations(q);
+    List<OptimizationRecommendation>,
+    RecommendationQuery>((ref, query) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getRecommendations(
+    status:   query.status,
+    priority: query.priority,
+    limit:    query.limit,
+  );
 });
 
-final intelligenceActionsProvider = Provider<_IntelligenceActions>((ref) {
-  final api = ref.watch(intelligenceApiProvider);
-  return _IntelligenceActions(api, ref);
+// ─────────────────────────────────────────────
+// Refund-Adjusted ROAS
+// ─────────────────────────────────────────────
+
+final refundRoasProvider =
+    FutureProvider<Map<String, dynamic>>((ref) async {
+  final api = ref.watch(workerApiProvider);
+  return api.getRefundRoas();
 });
 
-class _IntelligenceActions {
-  final WorkerIntelligenceApi _api;
+// ─────────────────────────────────────────────
+// Intelligence Actions (apply / dismiss / recompute)
+// ─────────────────────────────────────────────
+
+class IntelligenceActions {
+  final WorkerApiService _api;
   final Ref _ref;
 
-  _IntelligenceActions(this._api, this._ref);
-
-  Future<void> recompute() async {
-    await _api.recompute();
-    _ref.invalidate(intelligenceSummaryProvider);
-  }
+  IntelligenceActions(this._api, this._ref);
 
   Future<void> apply(String id) async {
     await _api.applyRecommendation(id);
-    _ref.invalidate(recommendationsProvider);
+    _ref.invalidate(
+      recommendationsProvider(const RecommendationQuery(status: 'open')),
+    );
     _ref.invalidate(intelligenceSummaryProvider);
   }
 
   Future<void> dismiss(String id) async {
     await _api.dismissRecommendation(id);
-    _ref.invalidate(recommendationsProvider);
+    _ref.invalidate(
+      recommendationsProvider(const RecommendationQuery(status: 'open')),
+    );
     _ref.invalidate(intelligenceSummaryProvider);
   }
+
+  Future<Map<String, dynamic>> recompute() async {
+    final result = await _api.recomputeIntelligence();
+    // Invalidate all intelligence data after recompute
+    _ref.invalidate(intelligenceSummaryProvider);
+    _ref.invalidate(
+      audienceScoresProvider(const AudienceQuery()),
+    );
+    _ref.invalidate(
+      creativeMatchesProvider(const CreativeQuery()),
+    );
+    _ref.invalidate(
+      buyerQualityProvider(const BuyerQuery()),
+    );
+    _ref.invalidate(
+      recommendationsProvider(const RecommendationQuery(status: 'open')),
+    );
+    _ref.invalidate(refundRoasProvider);
+    return result;
+  }
 }
+
+final intelligenceActionsProvider =
+    Provider<IntelligenceActions>((ref) {
+  final api = ref.watch(workerApiProvider);
+  return IntelligenceActions(api, ref);
+});

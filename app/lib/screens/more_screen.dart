@@ -239,6 +239,7 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
                 SliverToBoxAdapter(child: _quickLinks()),
 
                 SliverToBoxAdapter(child: _opsSection()),
+                SliverToBoxAdapter(child: _intelligenceSection()),
                 SliverToBoxAdapter(child: _integrationsSection()),
                 SliverToBoxAdapter(child: _syncSection()),
                 SliverToBoxAdapter(child: _exportAndShareSection()),
@@ -1240,29 +1241,137 @@ class _MoreScreenState extends ConsumerState<MoreScreen>
     );
   }
 
-  // ───────────────────────────
-  // About
-  // ───────────────────────────
+    // ══════════════════════════════════════════════════════════════
+  // Helper Methods
+  // ══════════════════════════════════════════════════════════════
 
-  Widget _aboutSection() {
+  Widget _moreItem({
+    IconData? icon,
+    Color? color,
+    String? title,
+    String? subtitle,
+    VoidCallback? onTap,
+  }) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: icon != null
+          ? Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: (color ?? C.primary).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: color ?? C.primary, size: 18),
+            )
+          : null,
+      title: title != null
+          ? Text(
+              title,
+              style: const TextStyle(color: C.textPrimary, fontSize: 14),
+            )
+          : null,
+      subtitle: subtitle != null
+          ? Text(
+              subtitle,
+              style: const TextStyle(color: C.textMuted, fontSize: 11),
+            )
+          : null,
+      trailing: const Icon(Icons.chevron_right_rounded, color: C.textMuted),
+      onTap: onTap,
+    );
+  }
+
+  Widget _intelligenceSection() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: GlassCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionTitle('About', Icons.info_rounded),
+            _sectionTitle('Intelligence', Icons.auto_awesome_rounded),
             const SizedBox(height: 14),
-            _menuItem(Icons.verified_rounded, 'Kaapav Ad Engine', C.primary, () {}),
-            _menuItem(Icons.hub_rounded, 'Worker-first ROAS Intelligence', C.blue, () {}),
-            _menuItem(Icons.policy_rounded, 'Privacy & Terms (Coming soon)', C.textSecondary, () {
-              _snack('Add Privacy/Terms links when ready', ok: true);
-            }),
+            _moreItem(
+              icon: Icons.location_on_rounded,
+              color: C.blue,
+              title: 'Geo Intelligence',
+              subtitle: 'City-level ROAS and intent clusters',
+              onTap: () => context.push('/audience'),
+            ),
+            _moreItem(
+              icon: Icons.grain_rounded,
+              color: C.primary,
+              title: 'Platinum Seed Sync',
+              subtitle: 'Push top buyers to Meta Custom Audience',
+              onTap: () async {
+                HapticFeedback.mediumImpact();
+                _snack('Seed sync coming soon', ok: true);
+              },
+            ),
           ],
         ),
       ),
     );
   }
+
+  // ───────────────────────────
+  // About
+  // ───────────────────────────
+
+  Widget _aboutSection() {
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+    child: GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionTitle('About', Icons.info_rounded),
+          const SizedBox(height: 14),
+
+          _menuItem(Icons.verified_rounded, 'Kaapav Ad Engine', C.primary, () {}),
+          _menuItem(Icons.hub_rounded, 'Worker-first ROAS Intelligence', C.blue, () {}),
+
+          // ✅ Intelligence entry (INSIDE the Column)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: C.purple.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.auto_awesome_rounded,
+                color: C.purple,
+                size: 18,
+              ),
+            ),
+            title: const Text(
+              'Intelligence',
+              style: TextStyle(color: C.textPrimary, fontSize: 14),
+            ),
+            subtitle: const Text(
+              'Audiences • Creative Matrix • Buyers',
+              style: TextStyle(color: C.textMuted, fontSize: 11),
+            ),
+            trailing: const Icon(
+              Icons.chevron_right_rounded,
+              color: C.textMuted,
+            ),
+            // 🔧 Change this to the EXACT route that exists in your GoRouter
+            onTap: () => context.push('/audience'),
+          ),
+
+          _menuItem(
+            Icons.policy_rounded,
+            'Privacy & Terms (Coming soon)',
+            C.textSecondary,
+            () => _snack('Add Privacy/Terms links when ready', ok: true),
+          ),
+        ],
+      ),
+    ),
+  );
+}
 
   // ───────────────────────────
   // Maintenance / Danger zone

@@ -1562,8 +1562,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen>
               // CTR/CVR shown as percentage values
               final impressions = math.max(1.0, s.totalImpressions);
               final clicks = math.max(1.0, s.totalClicks);
-              final conv = math.max(1.0, s.totalConversions);
-
+              
               final ctrPct = (s.totalClicks / impressions) * 100.0;
               final cvrPct = (s.totalConversions / clicks) * 100.0;
 
@@ -2349,37 +2348,50 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen>
 
   double _clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
 
-  double _healthScore({
-    required double roas,
-    required double cpa,
-    required double ctrPct,
-    required int fatigueAlerts,
-    required int openRecs,
-  }) {
-    var score = 60.0;
+double _healthScore({
+  required double roas,
+  required double cpa,
+  required double ctrPct,
+  required int fatigueAlerts,
+  required int openRecs,
+}) {
+  var score = 60.0;
 
-    // ROAS
-    if (roas >= 5) score += 18;
-    else if (roas >= 3) score += 10;
-    else if (roas >= 2) score += 2;
-    else score -= 12;
-
-    // CPA
-    if (cpa <= 200) score += 10;
-    else if (cpa <= 280) score += 3;
-    else score -= 10;
-
-    // CTR (percent based thresholds)
-    if (ctrPct >= 3.0) score += 6;
-    else if (ctrPct >= 1.5) score += 2;
-    else score -= 6;
-
-    // Ops
-    score -= math.min(18.0, fatigueAlerts * 2.0);
-    score -= math.min(14.0, openRecs * 1.2);
-
-    return score.clamp(0.0, 100.0);
+  // ROAS
+  if (roas >= 5) {
+    score += 18;
+  } else if (roas >= 3) {
+    score += 10;
+  } else if (roas >= 2) {
+    score += 2;
+  } else {
+    score -= 12;
   }
+
+  // CPA
+  if (cpa <= 200) {
+    score += 10;
+  } else if (cpa <= 280) {
+    score += 3;
+  } else {
+    score -= 10;
+  }
+
+  // CTR (avgCtr is percent like 3.8)
+  if (ctrPct >= 3.0) {
+    score += 6;
+  } else if (ctrPct >= 1.5) {
+    score += 2;
+  } else {
+    score -= 6;
+  }
+
+  // Ops penalties
+  score -= math.min(18.0, fatigueAlerts * 2.0);
+  score -= math.min(14.0, openRecs * 1.2);
+
+  return score.clamp(0.0, 100.0);
+}
 
   String _healthLabel(double score) {
     if (score >= 80) {

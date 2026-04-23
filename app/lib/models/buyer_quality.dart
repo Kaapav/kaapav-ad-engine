@@ -1,31 +1,29 @@
+// ═══════════════════════════════════════════════════════════════
+// BUYER QUALITY MODEL
+// Maps to buyer_scores D1 table
+// ═══════════════════════════════════════════════════════════════
+
 class BuyerQuality {
-  final String id;
+  final String  id;
   final String? leadId;
-  final String phone;
-  final String? customerName;
-
-  final int totalOrders;
-  final double totalRevenue;
-  final double avgOrderValue;
-  final int repeatOrders;
-
-  /// Important: Worker can store this as 0-1 or 0-100.
-  /// We keep the raw value and render safely in UI.
-  final double prepaidRatio;
-
-  final int refundCount;
-  final double responseScore;
-  final double buyerQualityScore;
-
-  final String buyerTier; // platinum | gold | silver | risk
-  final bool lookalikeSeedEligible;
-
-  final String? productAffinity;
+  final String  phone;
+  final String  customerName;
+  final int     totalOrders;
+  final double  totalRevenue;
+  final double  avgOrderValue;
+  final int     repeatOrders;
+  final double  prepaidRatio;
+  final int     refundCount;
+  final double  responseScore;
+  final double  buyerQualityScore;
+  final String  buyerTier;           // platinum / gold / silver / risk
+  final bool    lookalikeSeedEligible;
+  final String  productAffinity;
   final DateTime updatedAt;
 
   const BuyerQuality({
     required this.id,
-    required this.leadId,
+    this.leadId,
     required this.phone,
     required this.customerName,
     required this.totalOrders,
@@ -42,86 +40,46 @@ class BuyerQuality {
     required this.updatedAt,
   });
 
-  bool get isPlatinum => buyerTier == 'platinum';
-  bool get isGold => buyerTier == 'gold';
+  // ── Getters ────────────────────────────────────────────────
+  bool get isPlatinum    => buyerTier == 'platinum';
+  bool get isGold        => buyerTier == 'gold';
+  bool get isSilver      => buyerTier == 'silver';
+  bool get isRisk        => buyerTier == 'risk';
   bool get isSeedEligible => lookalikeSeedEligible;
 
-  String get displayName =>
-      (customerName?.trim().isNotEmpty ?? false) ? customerName!.trim() : phone;
+  factory BuyerQuality.fromJson(Map<String, dynamic> j) {
+    bool parseBool(dynamic v) {
+      if (v == null) return false;
+      if (v is bool) return v;
+      if (v is num) return v.toInt() == 1;
+      final s = v.toString().trim().toLowerCase();
+      return s == '1' || s == 'true';
+    }
 
-  static double _d(dynamic v) {
-    if (v == null) return 0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString()) ?? 0;
-  }
-
-  static int _i(dynamic v) {
-    if (v == null) return 0;
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    return int.tryParse(v.toString()) ?? 0;
-  }
-
-  static bool _b01(dynamic v) {
-    if (v == null) return false;
-    if (v is bool) return v;
-    if (v is num) return v.toInt() == 1;
-    final s = v.toString().toLowerCase().trim();
-    return s == '1' || s == 'true' || s == 'yes';
-  }
-
-  static DateTime _dt(dynamic v) {
-    if (v == null) return DateTime.fromMillisecondsSinceEpoch(0);
-    if (v is DateTime) return v;
-    return DateTime.tryParse(v.toString()) ??
-        DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  factory BuyerQuality.fromJson(Map<String, dynamic> json) {
     return BuyerQuality(
-      id: json['id']?.toString() ?? '',
-      leadId: (json['leadId'] ?? json['lead_id'])?.toString(),
-      phone: json['phone']?.toString() ?? '',
-      customerName: (json['customerName'] ?? json['customer_name'])?.toString(),
-      totalOrders: _i(json['totalOrders'] ?? json['total_orders']),
-      totalRevenue: _d(json['totalRevenue'] ?? json['total_revenue']),
-      avgOrderValue: _d(json['avgOrderValue'] ?? json['avg_order_value']),
-      repeatOrders: _i(json['repeatOrders'] ?? json['repeat_orders']),
-      prepaidRatio: _d(json['prepaidRatio'] ?? json['prepaid_ratio']),
-      refundCount: _i(json['refundCount'] ?? json['refund_count']),
-      responseScore: _d(json['responseScore'] ?? json['response_score']),
+      id:           j['id']?.toString()              ?? '',
+      leadId:       j['lead_id']?.toString(),
+      phone:        j['phone']?.toString()            ?? '',
+      customerName: j['customer_name']?.toString()   ??
+          j['phone']?.toString() ?? 'Unknown',
+      totalOrders:  (j['total_orders'] as num?)?.toInt()    ?? 0,
+      totalRevenue: (j['total_revenue'] as num?)?.toDouble() ?? 0,
+      avgOrderValue:(j['avg_order_value'] as num?)?.toDouble() ?? 0,
+      repeatOrders: (j['repeat_orders'] as num?)?.toInt()   ?? 0,
+      prepaidRatio: (j['prepaid_ratio'] as num?)?.toDouble() ?? 0,
+      refundCount:  (j['refund_count'] as num?)?.toInt()    ?? 0,
+      responseScore:(j['response_score'] as num?)?.toDouble() ?? 0,
       buyerQualityScore:
-          _d(json['buyerQualityScore'] ?? json['buyer_quality_score']),
-      buyerTier: (json['buyerTier'] ?? json['buyer_tier'] ?? 'silver')
-          .toString()
-          .toLowerCase(),
-      lookalikeSeedEligible: _b01(
-        json['lookalikeSeedEligible'] ?? json['lookalike_seed_eligible'],
-      ),
+          (j['buyer_quality_score'] as num?)?.toDouble() ?? 0,
+      buyerTier:    j['buyer_tier']?.toString() ?? 'silver',
+      lookalikeSeedEligible:
+          parseBool(j['lookalike_seed_eligible']),
       productAffinity:
-          (json['productAffinity'] ?? json['product_affinity'])?.toString(),
-      updatedAt: _dt(json['updatedAt'] ?? json['updated_at']),
+          j['product_affinity']?.toString() ?? 'general',
+      updatedAt: DateTime.tryParse(
+                   j['updated_at']?.toString() ?? '',
+                 ) ??
+                 DateTime.now(),
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'leadId': leadId,
-      'phone': phone,
-      'customerName': customerName,
-      'totalOrders': totalOrders,
-      'totalRevenue': totalRevenue,
-      'avgOrderValue': avgOrderValue,
-      'repeatOrders': repeatOrders,
-      'prepaidRatio': prepaidRatio,
-      'refundCount': refundCount,
-      'responseScore': responseScore,
-      'buyerQualityScore': buyerQualityScore,
-      'buyerTier': buyerTier,
-      'lookalikeSeedEligible': lookalikeSeedEligible ? 1 : 0,
-      'productAffinity': productAffinity,
-      'updatedAt': updatedAt.toIso8601String(),
-    };
   }
 }

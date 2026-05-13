@@ -632,6 +632,14 @@ export default {
 case '*/30 * * * *':
   ctx.waitUntil(
     Promise.all([
+      import('./services/realtime-monitor').then(m => m.runRealtimeMonitor(env)),
+      import('./services/response-speed').then(m => m.runResponseSpeedEngine(env)),
+    ]),
+  );
+  break;
+
+  ctx.waitUntil(
+    Promise.all([
       runRealtimeMonitor(env),
       runResponseSpeedEngine(env),
     ]),

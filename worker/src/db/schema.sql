@@ -390,9 +390,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS
   ON audience_scores(audience_key);
 
 -- Add to creative_scores table  
-CREATE UNIQUE INDEX IF NOT EXISTS 
-  idx_creative_scores_campaign_audience 
-  ON creative_scores(campaign_id, audience_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_creative_scores_ad_audience
+  ON creative_scores(ad_id, audience_key)
+  WHERE ad_id IS NOT NULL;
 
 -- Add to buyer_scores table
 CREATE UNIQUE INDEX IF NOT EXISTS 

@@ -75,21 +75,30 @@ class AutoRule {
     return AutoRule(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
-      condition: json['condition'] as String? ?? '',
-      action: json['action'] as String? ?? '',
+      condition: json['condition'] as String? ?? 
+           json['condition_text'] as String? ?? '',
+      action: json['action'] as String? ?? 
+           json['action_text'] as String? ?? '',
       metric: json['metric'] as String? ?? 'roas',
       operator: json['operator'] as String? ?? '<',
       threshold: (json['threshold'] as num?)?.toDouble() ?? 0,
-      actionType: json['actionType'] as String? ?? 'pause',
-      actionValue: json['actionValue'] as String?,
-      enabled: json['enabled'] as bool? ?? true,
-      triggeredCount: json['triggeredCount'] as int? ?? 0,
-      lastTriggered: json['lastTriggered'] != null
-          ? DateTime.parse(json['lastTriggered'])
-          : null,
-      appliedTo: json['appliedTo'] as String?,
-      checkInterval: json['checkInterval'] as String?,
+      enabled: _toBool(json['enabled'] ?? json['enabled']),
+      triggeredCount: (json['triggeredCount'] ?? json['triggered_count'] as num?)?.toInt() ?? 0,
+      lastTriggered: (json['lastTriggered'] ?? json['last_triggered']) != null
+      ? DateTime.tryParse(json['lastTriggered'] ?? json['last_triggered'])
+      : null,
+      appliedTo: json['appliedTo'] as String? ?? json['applied_to'] as String?,
+      checkInterval: (json['checkInterval'] ?? json['check_interval'])?.toString(),
+      actionType: json['actionType'] as String? ?? json['action_type'] as String? ?? 'pause',
+      actionValue: (json['actionValue'] ?? json['action_value'])?.toString(),
     );
+  }
+  static bool _toBool(dynamic v) {
+    if (v == null) return true;
+    if (v is bool) return v;
+    if (v is int) return v == 1;
+    if (v is String) return v == '1' || v.toLowerCase() == 'true';
+    return true;
   }
 }
 

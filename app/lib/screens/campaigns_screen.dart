@@ -229,49 +229,44 @@ class _CampaignsScreenState extends ConsumerState<CampaignsScreen>
   }
 
   Widget _header() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Row(
-        children: [
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Campaigns',
-                  style: TextStyle(
-                    color: C.textPrimary,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                  ),
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+    child: Row(
+      children: [
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Campaigns',
+                style: TextStyle(
+                  color: C.textPrimary,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
                 ),
-                Text(
-                  'Worker-synced Meta campaigns',
-                  style: TextStyle(
-                    color: C.textSecondary,
-                    fontSize: 12,
-                  ),
+              ),
+              Text(
+                'Worker-synced Meta campaigns',
+                style: TextStyle(
+                  color: C.textSecondary,
+                  fontSize: 12,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          OutlineBtn(
-            label: 'Create',
-            icon: Icons.add_rounded,
-            onTap: () {
-              HapticFeedback.lightImpact();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Create campaign flow will be wired via Worker next.'),
-                  backgroundColor: C.bgCard,
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
+        ),
+        OutlineBtn(
+          label: 'Create',
+          icon: Icons.add_rounded,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            context.push('/campaigns/create');
+          },
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _summaryBar(List<Campaign> campaigns) {
     final active = campaigns.where((c) => c.isActive).length;

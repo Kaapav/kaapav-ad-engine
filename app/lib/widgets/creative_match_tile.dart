@@ -40,9 +40,7 @@ class CreativeMatchTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sc = _statusColor(m.status);
-
-    return GlassCard(
+        return GlassCard(
       onTap: onTap,
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -69,10 +67,10 @@ class CreativeMatchTile extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             [
-              if (m.productTag?.isNotEmpty ?? false) m.productTag!,
-              if (m.angle?.isNotEmpty ?? false) m.angle!,
-              if (m.hookType?.isNotEmpty ?? false) m.hookType!,
-              if (m.creativeType?.isNotEmpty ?? false) m.creativeType!,
+              if (m.productTag != null && m.productTag!.isNotEmpty) m.productTag!,
+if (m.angle != null && m.angle!.isNotEmpty) m.angle!,
+if (m.hookType != null && m.hookType!.isNotEmpty) m.hookType!,
+if (m.creativeType != null && m.creativeType!.isNotEmpty) m.creativeType!,
             ].join(' • '),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

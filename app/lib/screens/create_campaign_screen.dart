@@ -7,14 +7,16 @@ import '../widgets/glass_card.dart';
 import '../widgets/buttons.dart';
 import '../widgets/search_filter.dart';
 import '../widgets/inputs.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/app_providers.dart';
 
-class CreateCampaignScreen extends StatefulWidget {
+class CreateCampaignScreen extends ConsumerStatefulWidget {
   const CreateCampaignScreen({super.key});
   @override
-  State<CreateCampaignScreen> createState() => _CreateCampaignScreenState();
+  ConsumerState<CreateCampaignScreen> createState() => _CreateCampaignScreenState();
 }
-
-class _CreateCampaignScreenState extends State<CreateCampaignScreen> with SingleTickerProviderStateMixin {
+class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _bgC;
   int _step = 0; // 0=Objective, 1=Budget, 2=Targeting, 3=Review
   final _steps = ['Objective', 'Budget', 'Targeting', 'Review'];
@@ -30,7 +32,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> with Single
   final _selectedGenders = <String>{'Female'};
   final _selectedLocations = <String>{'Mumbai', 'Delhi'};
   final _selectedInterests = <String>{'Fashion jewellery'};
-  String _platform = 'Facebook';
+  final _selectedPlatforms = <String>{'Facebook', 'Instagram'};
 
   final _allLocations = [
     'Mumbai', 'Delhi', 'Bangalore', 'Pune', 'Ahmedabad', 'Surat',
@@ -45,6 +47,90 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> with Single
     'Wedding planning', 'Bridal makeup', 'Garba', 'Ethnic wear',
     'Sarees', 'Lehengas', 'Women fashion',
   ];
+ 
+bool _isLaunching = false;
+Future<void> _launchCampaign() async {
+  setState(() => _isLaunching = true);
+
+  final budget = double.tryParse(_budgetCtrl.text) ?? 0;
+
+  final error = await ref.read(campaignsProvider.notifier).createCampaign(
+    name: _nameCtrl.text.trim(),
+    objective: _objective!,
+    status: 'ACTIVE',
+    bidStrategy: _bidStrategy,
+    dailyBudget: _budgetType == 'daily' ? budget : null,
+    lifetimeBudget: _budgetType == 'lifetime' ? budget : null,
+  );
+
+  if (!mounted) return;
+  setState(() => _isLaunching = false);
+
+  if (error != null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: C.error,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: Text(
+          _humanizeError(error),
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
+    return;
+  }
+
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => Dialog(
+      backgroundColor: Colors.transparent,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: Glass.blur,
+          child: Container(
+            padding: const EdgeInsets.all(28),
+            decoration: Glass.card(radius: 24, turquoise: true, glow: true),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 64, height: 64,
+                  decoration: BoxDecoration(
+                    gradient: C.successGrad,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: C.success.withValues(alpha: 0.4), blurRadius: 20)],
+                  ),
+                  child: const Icon(Icons.check_rounded, color: Colors.white, size: 32),
+                ),
+                const SizedBox(height: 18),
+                const Text('Campaign Created! 🎉', style: TextStyle(color: C.textPrimary, fontSize: 18, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                Text('"${_nameCtrl.text}" is now live', style: const TextStyle(color: C.textSecondary, fontSize: 13)),
+                const SizedBox(height: 8),
+                const Text('Meta will review your ad within 24 hours', style: TextStyle(color: C.textMuted, fontSize: 11)),
+                const SizedBox(height: 20),
+                PrimaryBtn(label: 'Done', onTap: () {
+                  Navigator.pop(context); // close dialog
+                  Navigator.pop(context); // back to campaigns
+                }),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+String _humanizeError(String raw) {
+  if (raw.contains('190')) return 'Meta token expired. Reconnect in Settings.';
+  if (raw.contains('Worker not connected')) return 'Worker not configured. Add API key in Settings.';
+  if (raw.contains('SocketException') || raw.contains('network') || raw.contains('connection')) return 'No internet. Check your connection.';
+  return 'Something went wrong. Try again.';
+}
 
   @override
   void initState() {
@@ -270,44 +356,64 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> with Single
         ),
         const SizedBox(height: 12),
         GlassCard(
-          radius: 14,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            children: [
-              const Text('Platform', style: TextStyle(color: C.textSecondary, fontSize: 12)),
-              const Spacer(),
-              ...['Facebook', 'Instagram'].map((p) {
-                final sel = _platform == p;
-                final isFb = p == 'Facebook';
-                return Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _platform = p),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: sel ? (isFb ? C.facebook : C.instagram).withValues(alpha: 0.15) : C.glassWhite,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: sel ? (isFb ? C.facebook : C.instagram).withValues(alpha: 0.5) : C.glassBorder),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(isFb ? Icons.facebook_rounded : Icons.camera_alt_rounded, color: sel ? (isFb ? C.facebook : C.instagram) : C.textMuted, size: 14),
-                          const SizedBox(width: 4),
-                          Text(p, style: TextStyle(color: sel ? (isFb ? C.facebook : C.instagram) : C.textMuted, fontSize: 11, fontWeight: sel ? FontWeight.w600 : FontWeight.w400)),
-                        ],
-                      ),
+  radius: 14,
+  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+  child: Row(
+    children: [
+      const Text('Platform', style: TextStyle(color: C.textSecondary, fontSize: 12)),
+      const Spacer(),
+      ...['Facebook', 'Instagram'].map((p) {
+        final sel = _selectedPlatforms.contains(p);
+        final isFb = p == 'Facebook';
+        return Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: GestureDetector(
+            onTap: () => setState(() {
+              sel
+                  ? _selectedPlatforms.remove(p)
+                  : _selectedPlatforms.add(p);
+              if (_selectedPlatforms.isEmpty) _selectedPlatforms.add(p);
+            }),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: sel ? (isFb ? C.facebook : C.instagram).withValues(alpha: 0.15) : C.glassWhite,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: sel
+                      ? (isFb ? C.facebook : C.instagram).withValues(alpha: 0.5)
+                      : C.glassBorder,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isFb ? Icons.facebook_rounded : Icons.camera_alt_rounded,
+                    color: sel ? (isFb ? C.facebook : C.instagram) : C.textMuted,
+                    size: 14,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    p,
+                    style: TextStyle(
+                      color: sel ? (isFb ? C.facebook : C.instagram) : C.textMuted,
+                      fontSize: 11,
+                      fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
                     ),
                   ),
-                );
-              }),
-            ],
+                ],
+              ),
+            ),
           ),
-        ),
-      ],
-    );
-  }
+        );
+      }),
+    ],
+  ),
+),
+   ],    // closes Column's children list
+    );      // closes Column
+  } 
 
   // ═══ STEP 2: BUDGET ═══
   Widget _stepBudget() {
@@ -612,6 +718,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> with Single
         const SizedBox(height: 4),
         const Text('Confirm everything looks good', style: TextStyle(color: C.textMuted, fontSize: 12)),
         const SizedBox(height: 16),
+        _reviewRow('Platform', _selectedPlatforms.join(' + ')),
 
         // CAMPAIGN OVERVIEW
         GlassCard(
@@ -635,7 +742,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> with Single
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(_nameCtrl.text.isEmpty ? 'Campaign Name' : _nameCtrl.text, style: const TextStyle(color: C.textPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
-                        Text(_platform, style: const TextStyle(color: C.textSecondary, fontSize: 12)),
+                        Text(_selectedPlatforms.join(' + '), style: const TextStyle(color: C.textSecondary, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -716,61 +823,22 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> with Single
           Expanded(
             flex: 2,
             child: PrimaryBtn(
-              label: _step == 3 ? '🚀 Launch Campaign' : 'Continue',
-              icon: _step == 3 ? Icons.rocket_launch_rounded : Icons.arrow_forward_rounded,
-              onTap: _canProceed
-                  ? () {
-                      HapticFeedback.mediumImpact();
-                      if (_step < 3) {
-                        setState(() => _step++);
-                      } else {
-                        _launchCampaign();
-                      }
-                    }
-                  : null,
-            ),
+  label: _step == 3 ? '🚀 Launch Campaign' : 'Continue',
+  icon: _step == 3 ? Icons.rocket_launch_rounded : Icons.arrow_forward_rounded,
+  loading: _step == 3 && _isLaunching,
+  onTap: _canProceed && !_isLaunching
+      ? () {
+          HapticFeedback.mediumImpact();
+          if (_step < 3) {
+            setState(() => _step++);
+          } else {
+            _launchCampaign();
+          }
+        }
+      : null,
+),
           ),
         ],
-      ),
-    );
-  }
-
-  void _launchCampaign() {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: BackdropFilter(
-            filter: Glass.blur,
-            child: Container(
-              padding: const EdgeInsets.all(28),
-              decoration: Glass.card(radius: 24, turquoise: true, glow: true),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 64, height: 64,
-                    decoration: BoxDecoration(gradient: C.successGrad, shape: BoxShape.circle, boxShadow: [BoxShadow(color: C.success.withValues(alpha: 0.4), blurRadius: 20)]),
-                    child: const Icon(Icons.check_rounded, color: Colors.white, size: 32),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text('Campaign Created! 🎉', style: TextStyle(color: C.textPrimary, fontSize: 18, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  Text('"${_nameCtrl.text}" is now live', style: const TextStyle(color: C.textSecondary, fontSize: 13)),
-                  const SizedBox(height: 8),
-                  const Text('Meta will review your ad within 24 hours', style: TextStyle(color: C.textMuted, fontSize: 11)),
-                  const SizedBox(height: 20),
-                  PrimaryBtn(label: 'Done', onTap: () {
-                    Navigator.pop(context); // Close dialog
-                    Navigator.pop(context); // Go back
-                  }),
-                ],
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }

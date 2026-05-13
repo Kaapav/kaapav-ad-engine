@@ -383,19 +383,28 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
                 size: 24,
               ),
             ),
-            child: RuleCard(
-              name: rule.name,
-              condition: rule.condition,
-              action: rule.action,
-              enabled: rule.enabled,
-              triggeredCount: rule.triggeredCount,
-              lastTriggered:
-                  rule.lastTriggered != null ? U.ago(rule.lastTriggered!) : null,
-              onToggle: (_) async {
-                HapticFeedback.lightImpact();
-                await ref.read(rulesProvider.notifier).toggle(rule.id);
-              },
-            ),
+           child: RuleCard(
+  name: rule.name,
+  condition: rule.condition,
+  action: rule.action,
+  enabled: rule.enabled,
+  triggeredCount: rule.triggeredCount,
+  lastTriggered: rule.lastTriggered != null ? U.ago(rule.lastTriggered!) : null,
+  metric: rule.metric,
+  actionType: rule.actionType,
+  onToggle: (_) async {
+    HapticFeedback.lightImpact();
+    await ref.read(rulesProvider.notifier).toggle(rule.id);
+  },
+  onEdit: () => _showEditRule(rule),
+  onDelete: () async {
+    await ref.read(rulesProvider.notifier).deleteRule(rule.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Rule "${rule.name}" deleted'), backgroundColor: C.error),
+    );
+  },
+),
           ),
         );
       },
@@ -662,9 +671,267 @@ class _AutoPilotScreenState extends ConsumerState<AutoPilotScreen>
       },
     );
   }
+   
+  // ---------------------------
+  // Edit Rule 
+  // ---------------------------
+
+   void _showEditRule(AutoRule rule) {
+  HapticFeedback.lightImpact();
+
+  final nameCtrl = TextEditingController(text: rule.name);
+  final thresholdCtrl = TextEditingController(text: rule.threshold.toString());
+  final actionValueCtrl = TextEditingController(text: rule.actionValue ?? '');
+
+  String selectedMetric = rule.metric;
+  String selectedOperator = rule.operator;
+  String selectedAction = rule.actionType;
+
+  final metrics = <String>[
+    'roas', 'cpa', 'ctr', 'cpc', 'cpm', 'frequency',
+    'spend', 'budget_util', 'impressions', 'clicks', 'conversions', 'leads',
+  ];
+  final operators = <String>['<', '>', '<=', '>=', '==', '!='];
+  final actions = [
+    {'key': 'pause', 'label': 'Pause Campaign', 'icon': Icons.pause_circle_rounded, 'color': C.error},
+    {'key': 'scale_budget', 'label': 'Scale Budget (+%)', 'icon': Icons.trending_up_rounded, 'color': C.success},
+    {'key': 'reduce_budget', 'label': 'Reduce Budget (-%)', 'icon': Icons.trending_down_rounded, 'color': C.purple},
+    {'key': 'alert', 'label': 'Send Alert', 'icon': Icons.notifications_active_rounded, 'color': C.warning},
+    {'key': 'alert_and_pause', 'label': 'Alert & Pause', 'icon': Icons.warning_amber_rounded, 'color': C.pink},
+  ];
+
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (sheetCtx) => StatefulBuilder(
+      builder: (sheetCtx, setSheet) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        maxChildSize: 0.95,
+        minChildSize: 0.5,
+        builder: (sheetCtx, scrollCtrl) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [C.bgCard, C.bgDeep],
+                ),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border.all(color: C.glassBorder),
+              ),
+              child: ListView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.all(24),
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40, height: 4,
+                      decoration: BoxDecoration(color: C.glassBorder, borderRadius: BorderRadius.circular(2)),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Edit Rule', style: TextStyle(color: C.textPrimary, fontSize: 20, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  const Text('Update rule condition and action', style: TextStyle(color: C.textSecondary, fontSize: 12)),
+                  const SizedBox(height: 24),
+                  GlassInput(label: 'Rule Name', hint: 'e.g. Kill Low ROAS', controller: nameCtrl, prefixIcon: Icons.label_rounded),
+                  const SizedBox(height: 24),
+
+                  // Condition card
+                  GlassCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(gradient: C.primaryGrad, borderRadius: BorderRadius.circular(8)),
+                            child: const Text('IF', style: TextStyle(color: Colors.black, fontSize: 12, fontWeight: FontWeight.w800)),
+                          ),
+                          const SizedBox(width: 10),
+                          const Text('Condition', style: TextStyle(color: C.textSecondary, fontSize: 12)),
+                        ]),
+                        const SizedBox(height: 14),
+                        const Text('Metric', style: TextStyle(color: C.textMuted, fontSize: 11, fontWeight: FontWeight.w500)),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6, runSpacing: 6,
+                          children: metrics.map((m) {
+                            final sel = selectedMetric == m;
+                            return GestureDetector(
+                              onTap: () => setSheet(() => selectedMetric = m),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: sel ? C.primary.withValues(alpha: 0.15) : C.glassWhite,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: sel ? C.primary.withValues(alpha: 0.5) : C.glassBorder),
+                                ),
+                                child: Text(m.toUpperCase(), style: TextStyle(color: sel ? C.primary : C.textSecondary, fontSize: 10, fontWeight: FontWeight.w600)),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(children: [
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Operator', style: TextStyle(color: C.textMuted, fontSize: 11)),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 4, runSpacing: 4,
+                                  children: operators.map((op) {
+                                    final sel = selectedOperator == op;
+                                    return GestureDetector(
+                                      onTap: () => setSheet(() => selectedOperator = op),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: sel ? C.primary.withValues(alpha: 0.15) : C.glassWhite,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: sel ? C.primary : C.glassBorder),
+                                        ),
+                                        child: Text(op, style: TextStyle(color: sel ? C.primary : C.textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 3,
+                            child: GlassInput(
+                              label: 'Threshold', hint: 'e.g. 2.0',
+                              controller: thresholdCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              prefixIcon: Icons.speed_rounded,
+                            ),
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Action card
+                  GlassCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(color: C.gold, borderRadius: BorderRadius.circular(8)),
+                            child: const Text('THEN', style: TextStyle(color: Colors.black, fontSize: 12, fontWeight: FontWeight.w800)),
+                          ),
+                          const SizedBox(width: 10),
+                          const Text('Action', style: TextStyle(color: C.textSecondary, fontSize: 12)),
+                        ]),
+                        const SizedBox(height: 14),
+                        ...actions.map((a) {
+                          final sel = selectedAction == a['key'] as String;
+                          return GestureDetector(
+                            onTap: () => setSheet(() => selectedAction = a['key'] as String),
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: sel ? (a['color'] as Color).withValues(alpha: 0.1) : Colors.transparent,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: sel ? (a['color'] as Color).withValues(alpha: 0.4) : C.glassBorder),
+                              ),
+                              child: Row(children: [
+                                Icon(sel ? Icons.radio_button_checked : Icons.radio_button_off, color: sel ? a['color'] as Color : C.textMuted, size: 18),
+                                const SizedBox(width: 10),
+                                Icon(a['icon'] as IconData, color: sel ? a['color'] as Color : C.textMuted, size: 18),
+                                const SizedBox(width: 8),
+                                Text(a['label'] as String, style: TextStyle(color: sel ? C.textPrimary : C.textSecondary, fontSize: 13, fontWeight: sel ? FontWeight.w600 : FontWeight.w400)),
+                              ]),
+                            ),
+                          );
+                        }),
+                        if (selectedAction == 'scale_budget' || selectedAction == 'reduce_budget') ...[
+                          const SizedBox(height: 8),
+                          GlassInput(label: 'Percentage (%)', hint: 'e.g. 20', controller: actionValueCtrl, keyboardType: TextInputType.number, prefixIcon: Icons.percent_rounded),
+                        ],
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 24),
+                  PrimaryBtn(
+                    label: 'Save Changes',
+                    onTap: () async {
+                      final name = nameCtrl.text.trim();
+                      final threshold = double.tryParse(thresholdCtrl.text.trim());
+                      if (name.isEmpty || threshold == null) {
+                        ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                          const SnackBar(content: Text('Fill name and threshold'), backgroundColor: C.error),
+                        );
+                        return;
+                      }
+
+                      String? actionValue;
+                      if (selectedAction == 'scale_budget' || selectedAction == 'reduce_budget') {
+                        final v = double.tryParse(actionValueCtrl.text.trim());
+                        if (v == null || v <= 0) {
+                          ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                            const SnackBar(content: Text('Enter valid percentage'), backgroundColor: C.error),
+                          );
+                          return;
+                        }
+                        actionValue = actionValueCtrl.text.trim();
+                      }
+
+                      await ref.read(rulesProvider.notifier).deleteRule(rule.id);
+
+                      final updated = AutoRule(
+                        id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+                        name: name,
+                        condition: '${selectedMetric.toUpperCase()} $selectedOperator $threshold',
+                        action: '${selectedAction.replaceAll('_', ' ')}${actionValue != null ? ' $actionValue%' : ''}',
+                        metric: selectedMetric,
+                        operator: selectedOperator,
+                        threshold: threshold,
+                        actionType: selectedAction,
+                        actionValue: actionValue,
+                        enabled: rule.enabled,
+                        triggeredCount: 0,
+                      );
+
+                      await ref.read(rulesProvider.notifier).addRule(updated);
+
+                      if (!sheetCtx.mounted) return;
+                      Navigator.of(sheetCtx).pop();
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('✅ "${updated.name}" updated'), backgroundColor: C.success),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
   // ---------------------------
-  // Create Rule (same logic, cleaned execution)
+  // Create Rule 
   // ---------------------------
 
   void _showCreateRule() {

@@ -162,6 +162,29 @@ class CampaignsNotifier extends StateNotifier<AsyncValue<List<Campaign>>> {
       await load();
     }
   }
+ Future<String?> createCampaign({
+  required String name,
+  required String objective,
+  required String status,
+  String? bidStrategy,
+  double? dailyBudget,
+  double? lifetimeBudget,
+}) async {
+  try {
+    await _api.createCampaign(
+      name: name,
+      objective: objective,
+      status: status,
+      bidStrategy: bidStrategy,
+      dailyBudget: dailyBudget,
+      lifetimeBudget: lifetimeBudget,
+    );
+    await refresh(); // pull fresh list after create
+    return null; // null = success
+  } catch (e) {
+    return e.toString(); // returns error string on failure
+  }
+}
 }
 
 // ══════════════════════════════════════════════════════════════

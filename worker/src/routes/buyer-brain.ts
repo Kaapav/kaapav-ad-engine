@@ -270,9 +270,17 @@ app.post('/events', async (c) => {
       );
     }
 
-    let inserted = 0;
+let inserted = 0;
+let updated = 0;
 
-    for (const item of prepared) {
+for (const item of prepared) {
+  const existing = await c.env.DB.prepare(
+    `SELECT id FROM buyer_events WHERE id = ? LIMIT 1`,
+  )
+    .bind(item.id)
+    .first();
+
+  const isUpdate = !!existing;
       const e = item.raw;
 
       await c.env.DB.prepare(
@@ -340,21 +348,268 @@ app.post('/events', async (c) => {
         )
         .run();
 
-      inserted += 1;
+      if (isUpdate) {
+        updated += 1;
+      } else {
+        inserted += 1;
+      }
     }
+
+return c.json({
+  success: true,
+  data: {
+    processed: prepared.length,
+    inserted,
+    updated,
+    rejected: 0,
+    duplicate_mode: 'upsert_by_source_source_ref_event_type',
+  },
+});
+  } catch (err: any) {
+    return c.json({ success: false, error: err?.message ?? 'Failed' }, 500);
+  }
+});
+
+app.get('/events/order/contract', async (c) => {
+  return c.json({
+    success: true,
+    data: {
+      endpoint: '/api/buyer-brain/events/order',
+      method: 'POST',
+      purpose:
+        'Send Kaapav order lifecycle events to Buyer Brain for buyer-intent scoring.',
+      auth: {
+        required: true,
+        header: 'X-API-Key',
+      },
+      required_fields: [
+        'source',
+        'order_id',
+        'order_status',
+        'amount',
+      ],
+      recommended_fields: [
+        'order_time',
+        'customer_key',
+        'phone_hash',
+        'email_hash',
+        'campaign_id',
+        'campaign_name',
+        'adset_id',
+        'adset_name',
+        'ad_id',
+        'ad_name',
+        'creative_id',
+        'product_sku',
+        'product_category',
+        'product_name',
+        'currency',
+        'confidence',
+      ],
+      allowed_sources: Array.from(ALLOWED_EVENT_SOURCES),
+      status_mapping: {
+        order_paid: ['paid', 'completed', 'delivered'],
+        order_cancelled: ['cancelled', 'canceled'],
+        refund_created: ['refunded', 'refund'],
+        order_created: ['created', 'pending', 'processing'],
+      },
+      privacy_rules: [
+        'Do not send raw phone.',
+        'Do not send raw email.',
+        'Use phone_hash/email_hash only.',
+      ],
+      duplicate_rule:
+        'Same source + order_id + mapped event_type updates the existing buyer_event instead of creating duplicates.',
+      example: {
+        source: 'kaapav_app',
+        order_id: 'KP12345',
+        order_status: 'paid',
+        order_time: new Date().toISOString(),
+        customer_key: 'customer_12345',
+        phone_hash: 'sha256_phone_hash_optional',
+        email_hash: 'sha256_email_hash_optional',
+        campaign_id: '120249786696250007',
+        campaign_name: 'Kaapav_1 Sales campaign',
+        adset_id: null,
+        adset_name: null,
+        ad_id: null,
+        ad_name: null,
+        creative_id: null,
+        product_sku: 'KP-BRACELET-001',
+        product_category: 'bracelets',
+        product_name: 'Luxury Bracelet',
+        amount: 1299,
+        currency: 'INR',
+        confidence: 95,
+      },
+    },
+  });
+});
+
+app.post('/events/order', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json(
+        { success: false, error: 'Expected order object' },
+        400,
+      );
+    }
+
+    const e = body as Record<string, unknown>;
+
+    const source = str(e.source, 'kaapav_app').toLowerCase();
+    const orderId = nullableStr(e.order_id) || nullableStr(e.source_ref);
+    const orderStatus = str(e.order_status, 'paid').toLowerCase();
+    const amount = num(e.amount ?? e.total ?? e.event_value, 0);
+
+    if (!ALLOWED_EVENT_SOURCES.has(source)) {
+      return c.json(
+        { success: false, error: 'Invalid source' },
+        400,
+      );
+    }
+
+    if (!orderId) {
+      return c.json(
+        { success: false, error: 'order_id is required' },
+        400,
+      );
+    }
+
+    let eventType = 'order_created';
+
+    if (['paid', 'completed', 'delivered'].includes(orderStatus)) {
+      eventType = 'order_paid';
+    } else if (['cancelled', 'canceled'].includes(orderStatus)) {
+      eventType = 'order_cancelled';
+    } else if (['refunded', 'refund'].includes(orderStatus)) {
+      eventType = 'refund_created';
+    }
+
+    if (
+      ['order_paid', 'refund_created'].includes(eventType) &&
+      amount <= 0
+    ) {
+      return c.json(
+        {
+          success: false,
+          error: `${eventType} requires amount greater than 0`,
+        },
+        400,
+      );
+    }
+
+    const campaignId = nullableStr(e.campaign_id);
+
+    if (!isValidCampaignId(campaignId)) {
+      return c.json(
+        { success: false, error: 'campaign_id is invalid' },
+        400,
+      );
+    }
+
+    if ('phone' in e || 'email' in e) {
+      return c.json(
+        {
+          success: false,
+          error: 'Do not send raw phone/email. Use phone_hash/email_hash only.',
+        },
+        400,
+      );
+    }
+
+    const sourceRef = `order_${orderId}`;
+    const id = stableBuyerEventId(source, sourceRef, eventType);
+
+    const existing = await c.env.DB.prepare(
+      `SELECT id FROM buyer_events WHERE id = ? LIMIT 1`,
+    )
+      .bind(id)
+      .first();
+
+    await c.env.DB.prepare(
+      `INSERT OR REPLACE INTO buyer_events (
+        id,
+        source,
+        source_ref,
+        event_type,
+        event_time,
+
+        customer_key,
+        phone_hash,
+        email_hash,
+
+        campaign_id,
+        campaign_name,
+        adset_id,
+        adset_name,
+        ad_id,
+        ad_name,
+        creative_id,
+
+        product_sku,
+        product_category,
+        product_name,
+
+        event_value,
+        currency,
+        intent_weight,
+        confidence,
+
+        raw_json,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    )
+      .bind(
+        id,
+        source,
+        sourceRef,
+        eventType,
+        safeEventTime(e.event_time ?? e.order_time ?? e.created_at),
+
+        nullableStr(e.customer_key),
+        nullableStr(e.phone_hash),
+        nullableStr(e.email_hash),
+
+        campaignId,
+        nullableStr(e.campaign_name),
+        nullableStr(e.adset_id),
+        nullableStr(e.adset_name),
+        nullableStr(e.ad_id),
+        nullableStr(e.ad_name),
+        nullableStr(e.creative_id),
+
+        nullableStr(e.product_sku),
+        nullableStr(e.product_category),
+        nullableStr(e.product_name),
+
+        amount,
+        str(e.currency, 'INR'),
+        num(e.intent_weight, intentWeight(eventType, amount)),
+        clampNum(num(e.confidence, 90), 0, 100),
+
+        JSON.stringify(e),
+      )
+      .run();
 
     return c.json({
       success: true,
       data: {
-        inserted,
-        duplicate_mode: 'upsert_by_source_source_ref_event_type',
+        processed: 1,
+        inserted: existing ? 0 : 1,
+        updated: existing ? 1 : 0,
+        rejected: 0,
+        event_type: eventType,
+        source,
+        source_ref: sourceRef,
       },
     });
   } catch (err: any) {
     return c.json({ success: false, error: err?.message ?? 'Failed' }, 500);
   }
 });
-
 
 app.get('/events', async (c) => {
   try {

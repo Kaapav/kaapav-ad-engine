@@ -44,6 +44,21 @@ type BuyerEventSignal = {
   avg_confidence: number;
 };
 
+type SheetCategorySignal = {
+  product_category: string;
+  events: number;
+  customers: number;
+  product_views: number;
+  carts: number;
+  checkouts: number;
+  total_value: number;
+  intent_score: number;
+  avg_confidence: number;
+  buyer_intent_score: number;
+  confidence: number;
+  top_products: Array<Record<string, unknown>>;
+};
+
 function clamp(value: number, min = 0, max = 100): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, value));
@@ -595,6 +610,282 @@ async function upsertProductAffinity(env: Env, rows: CampaignBrainRow[]) {
   }
 }
 
+function categoryAudienceCluster(category: string): string {
+  return `${category
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')}_catalogue_intent_buyers`;
+}
+
+function scoreSheetCategorySignal(signal: {
+  product_views: number;
+  carts: number;
+  checkouts: number;
+  customers: number;
+  total_value: number;
+}): number {
+  const viewScore = Math.min(15, signal.product_views * 0.9);
+  const cartScore = Math.min(25, signal.carts * 6);
+  const checkoutScore = Math.min(35, signal.checkouts * 9);
+  const customerScore = Math.min(15, signal.customers * 2);
+  const valueScore = Math.min(10, signal.total_value / 1500);
+
+  return clamp(viewScore + cartScore + checkoutScore + customerScore + valueScore);
+}
+
+async function getTopSheetProductsForCategory(
+  env: Env,
+  category: string,
+): Promise<Array<Record<string, unknown>>> {
+  const rows = await env.DB.prepare(
+    `SELECT
+      product_sku,
+      product_name,
+      product_category,
+      COUNT(*) AS events,
+      SUM(intent_weight) AS intent_score,
+      SUM(event_value) AS total_value,
+      SUM(CASE WHEN event_type = 'add_to_cart' THEN 1 ELSE 0 END) AS carts,
+      SUM(CASE WHEN event_type = 'checkout_started' THEN 1 ELSE 0 END) AS checkouts
+    FROM buyer_events
+    WHERE source = 'sheet'
+      AND product_category = ?
+      AND product_sku IS NOT NULL
+      AND product_sku != ''
+      AND product_category IS NOT NULL
+      AND product_category != ''
+      AND product_category NOT IN ('Jewellery', 'All Jewellery')
+      AND product_category NOT LIKE '%,%'
+      AND event_type IN ('product_view', 'add_to_cart', 'checkout_started')
+    GROUP BY product_sku, product_name, product_category
+    ORDER BY SUM(intent_weight) DESC, SUM(event_value) DESC
+    LIMIT 5`,
+  )
+    .bind(category)
+    .all();
+
+  return (rows.results ?? []).map((row: any) => ({
+    product_sku: row.product_sku,
+    product_name: row.product_name,
+    product_category: row.product_category,
+    events: n(row.events),
+    intent_score: n(row.intent_score),
+    total_value: n(row.total_value),
+    carts: n(row.carts),
+    checkouts: n(row.checkouts),
+  }));
+}
+
+async function upsertSheetCategoryRecommendation(
+  env: Env,
+  signal: SheetCategorySignal,
+): Promise<number> {
+const recId = id('buyer_brain', 'sheet_category', signal.product_category);
+
+if (
+  signal.buyer_intent_score < 55 &&
+  signal.checkouts === 0 &&
+  signal.carts < 3
+) {
+  await env.DB.prepare(
+    `UPDATE targeting_recommendations
+     SET status = 'superseded',
+         priority = 'low',
+         buyer_intent_score = ?,
+         confidence = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       AND recommendation_type = 'category_intent'
+       AND status IN ('open', 'pending_approval', 'superseded')`,
+  )
+    .bind(signal.buyer_intent_score, signal.confidence, recId)
+    .run();
+
+  return 0;
+}
+
+  const priority =
+    signal.checkouts >= 3 || signal.buyer_intent_score >= 80
+      ? 'high'
+      : signal.carts >= 2 || signal.buyer_intent_score >= 65
+        ? 'medium'
+        : 'low';
+
+  const audienceCluster = categoryAudienceCluster(signal.product_category);
+
+  const reasons = [
+    `${signal.events} catalogue product-intent event(s) found for ${signal.product_category}.`,
+    `${signal.carts} add-to-cart and ${signal.checkouts} checkout-started signal(s).`,
+    `${signal.customers} unique customer(s) interacted with this category.`,
+    signal.checkouts > 0
+      ? 'Checkout-started signal exists, so this category deserves retargeting priority.'
+      : 'No checkout proof yet; keep this as a soft intent audience.',
+  ];
+
+  await env.DB.prepare(
+    `INSERT INTO targeting_recommendations (
+      id, source, recommendation_type, priority, status,
+      title, description, campaign_id, product_category, audience_cluster,
+      buyer_intent_score, waste_score, confidence,
+      suggested_action, suggested_budget, kill_rule, scale_rule,
+      payload_json, reasons_json, updated_at
+    ) VALUES (?, 'buyer_brain', 'category_intent', ?, 'open', ?, ?, NULL, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(id)
+    DO UPDATE SET
+      recommendation_type = excluded.recommendation_type,
+      priority = excluded.priority,
+      title = excluded.title,
+      description = excluded.description,
+      product_category = excluded.product_category,
+      audience_cluster = excluded.audience_cluster,
+      buyer_intent_score = excluded.buyer_intent_score,
+      waste_score = excluded.waste_score,
+      confidence = excluded.confidence,
+      suggested_action = excluded.suggested_action,
+      suggested_budget = excluded.suggested_budget,
+      kill_rule = excluded.kill_rule,
+      scale_rule = excluded.scale_rule,
+      payload_json = excluded.payload_json,
+      reasons_json = excluded.reasons_json,
+      updated_at = CURRENT_TIMESTAMP`,
+  )
+    .bind(
+      recId,
+      priority,
+      `Retarget ${signal.product_category} catalogue intent`,
+      `${signal.product_category} is showing buyer intent from catalogue activity. Build a retargeting test around viewers, carts, and checkout starters.`,
+      signal.product_category,
+      audienceCluster,
+      signal.buyer_intent_score,
+      signal.confidence,
+      'create_catalogue_retargeting_test',
+      priority === 'high' ? 500 : 300,
+      'Pause this retargeting test if spend crosses Rs. 500 with no WhatsApp/order signal.',
+      'Scale only after catalogue retargeting produces WhatsApp/order/revenue proof.',
+      JSON.stringify({
+        source: 'sheet',
+        signal_type: 'catalogue_category_intent',
+        product_category: signal.product_category,
+        events: signal.events,
+        customers: signal.customers,
+        product_views: signal.product_views,
+        carts: signal.carts,
+        checkouts: signal.checkouts,
+        total_value: signal.total_value,
+        top_products: signal.top_products,
+      }),
+      JSON.stringify(reasons),
+    )
+    .run();
+
+  return 1;
+}
+
+async function upsertSheetProductAffinityFromEvents(
+  env: Env,
+): Promise<{ affinitiesCreated: number; recommendationsCreated: number }> {
+  const rows = await env.DB.prepare(
+    `SELECT
+      product_category,
+      COUNT(*) AS events,
+      COUNT(DISTINCT customer_key) AS customers,
+      SUM(CASE WHEN event_type = 'product_view' THEN 1 ELSE 0 END) AS product_views,
+      SUM(CASE WHEN event_type = 'add_to_cart' THEN 1 ELSE 0 END) AS carts,
+      SUM(CASE WHEN event_type = 'checkout_started' THEN 1 ELSE 0 END) AS checkouts,
+      SUM(event_value) AS total_value,
+      SUM(intent_weight) AS intent_score,
+      AVG(confidence) AS avg_confidence
+    FROM buyer_events
+    WHERE source = 'sheet'
+      AND product_category IS NOT NULL
+      AND product_category != ''
+      AND product_category NOT IN ('Jewellery', 'All Jewellery')
+      AND product_category NOT LIKE '%,%'
+      AND event_type IN ('product_view', 'add_to_cart', 'checkout_started')
+    GROUP BY product_category
+    ORDER BY SUM(intent_weight) DESC
+    LIMIT 50`,
+  ).all();
+
+  let affinitiesCreated = 0;
+  let recommendationsCreated = 0;
+
+  for (const row of rows.results ?? []) {
+    const r = row as any;
+
+    const baseSignal = {
+      events: n(r.events),
+      customers: n(r.customers),
+      product_views: n(r.product_views),
+      carts: n(r.carts),
+      checkouts: n(r.checkouts),
+      total_value: n(r.total_value),
+    };
+
+    const buyerIntentScore = round(scoreSheetCategorySignal(baseSignal));
+    const confidence = round(
+      clamp(n(r.avg_confidence) + Math.min(10, baseSignal.customers), 50, 95),
+    );
+
+    const signal: SheetCategorySignal = {
+      product_category: String(r.product_category || ''),
+      ...baseSignal,
+      intent_score: n(r.intent_score),
+      avg_confidence: n(r.avg_confidence),
+      buyer_intent_score: buyerIntentScore,
+      confidence,
+      top_products: await getTopSheetProductsForCategory(
+        env,
+        String(r.product_category || ''),
+      ),
+    };
+
+    const reasons = [
+      `${signal.events} catalogue event(s) for ${signal.product_category}.`,
+      `${signal.product_views} product view(s), ${signal.carts} cart(s), ${signal.checkouts} checkout-started event(s).`,
+      `${signal.customers} unique customer(s) showed category interest.`,
+    ];
+
+    await env.DB.prepare(
+      `INSERT INTO product_affinity_scores (
+        id, product_category, source, buyer_intent_score,
+        spend, revenue, roas, clicks, impressions, conversions,
+        best_campaign_id, insight, reasons_json,
+        calculated_at, updated_at
+      ) VALUES (?, ?, 'sheet', ?, 0, 0, 0, ?, 0, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(product_category, source)
+      DO UPDATE SET
+        buyer_intent_score = excluded.buyer_intent_score,
+        spend = excluded.spend,
+        revenue = excluded.revenue,
+        roas = excluded.roas,
+        clicks = excluded.clicks,
+        impressions = excluded.impressions,
+        conversions = excluded.conversions,
+        best_campaign_id = excluded.best_campaign_id,
+        insight = excluded.insight,
+        reasons_json = excluded.reasons_json,
+        calculated_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(
+        id('pas', signal.product_category, 'sheet'),
+        signal.product_category,
+        signal.buyer_intent_score,
+        Math.round(signal.events),
+        Math.round(signal.carts + signal.checkouts),
+        `${signal.product_category} is scoring ${signal.buyer_intent_score}/100 from catalogue behaviour: ${signal.carts} carts and ${signal.checkouts} checkout starts.`,
+        JSON.stringify({ reasons, signal }),
+      )
+      .run();
+
+    affinitiesCreated += 1;
+    recommendationsCreated += await upsertSheetCategoryRecommendation(env, signal);
+  }
+
+  return { affinitiesCreated, recommendationsCreated };
+}
+
 async function upsertRecommendation(env: Env, row: CampaignBrainRow): Promise<number> {
   const rec = buildTargetingRecommendation(row);
   if (!rec) return 0;
@@ -699,9 +990,13 @@ const rows: CampaignBrainRow[] = campaigns.map((campaign) => {
       recommendationsCreated += await upsertRecommendation(env, row);
     }
 
-    await upsertProductAffinity(env, rows);
+await upsertProductAffinity(env, rows);
 
-    const durationMs = Date.now() - started;
+const sheetAffinityResult = await upsertSheetProductAffinityFromEvents(env);
+scoresCreated += sheetAffinityResult.affinitiesCreated;
+recommendationsCreated += sheetAffinityResult.recommendationsCreated;
+
+const durationMs = Date.now() - started;
 
     const result: BuyerBrainRunResult = {
       ok: true,

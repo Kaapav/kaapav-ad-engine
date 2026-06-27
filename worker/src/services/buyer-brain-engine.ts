@@ -708,12 +708,10 @@ async function upsertSheetCategoryRecommendation(
 ): Promise<number> {
   const recId = id('buyer_brain', 'sheet_category', signal.product_category);
 
-  if (
-    signal.buyer_intent_score < 55 &&
-    signal.paid_orders === 0 &&
-    signal.checkouts === 0 &&
-    signal.carts < 3
-  ) {
+if (
+  signal.buyer_intent_score < 55 &&
+  signal.paid_orders === 0
+) {
     await env.DB.prepare(
       `UPDATE targeting_recommendations
        SET status = 'superseded',

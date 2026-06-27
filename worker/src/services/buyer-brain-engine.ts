@@ -51,6 +51,11 @@ type SheetCategorySignal = {
   product_views: number;
   carts: number;
   checkouts: number;
+  order_created: number;
+  paid_orders: number;
+  paid_revenue: number;
+  refunds: number;
+  cancelled: number;
   total_value: number;
   intent_score: number;
   avg_confidence: number;
@@ -623,14 +628,35 @@ function scoreSheetCategorySignal(signal: {
   checkouts: number;
   customers: number;
   total_value: number;
+  order_created: number;
+  paid_orders: number;
+  paid_revenue: number;
+  refunds: number;
+  cancelled: number;
 }): number {
-  const viewScore = Math.min(15, signal.product_views * 0.9);
-  const cartScore = Math.min(25, signal.carts * 6);
-  const checkoutScore = Math.min(35, signal.checkouts * 9);
-  const customerScore = Math.min(15, signal.customers * 2);
-  const valueScore = Math.min(10, signal.total_value / 1500);
+  const viewScore = Math.min(10, signal.product_views * 0.7);
+  const cartScore = Math.min(20, signal.carts * 5);
+  const checkoutScore = Math.min(25, signal.checkouts * 8);
+  const orderScore = Math.min(
+    35,
+    signal.paid_orders * 12 + signal.order_created * 4,
+  );
+  const customerScore = Math.min(10, signal.customers * 1.5);
+  const valueScore = Math.min(
+    10,
+    Math.max(signal.total_value, signal.paid_revenue) / 2500,
+  );
+  const negativePenalty = signal.refunds * 15 + signal.cancelled * 10;
 
-  return clamp(viewScore + cartScore + checkoutScore + customerScore + valueScore);
+  return clamp(
+    viewScore +
+      cartScore +
+      checkoutScore +
+      orderScore +
+      customerScore +
+      valueScore -
+      negativePenalty,
+  );
 }
 
 async function getTopSheetProductsForCategory(
@@ -680,46 +706,52 @@ async function upsertSheetCategoryRecommendation(
   env: Env,
   signal: SheetCategorySignal,
 ): Promise<number> {
-const recId = id('buyer_brain', 'sheet_category', signal.product_category);
+  const recId = id('buyer_brain', 'sheet_category', signal.product_category);
 
-if (
-  signal.buyer_intent_score < 55 &&
-  signal.checkouts === 0 &&
-  signal.carts < 3
-) {
-  await env.DB.prepare(
-    `UPDATE targeting_recommendations
-     SET status = 'superseded',
-         priority = 'low',
-         buyer_intent_score = ?,
-         confidence = ?,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?
-       AND recommendation_type = 'category_intent'
-       AND status IN ('open', 'pending_approval', 'superseded')`,
-  )
-    .bind(signal.buyer_intent_score, signal.confidence, recId)
-    .run();
+  if (
+    signal.buyer_intent_score < 55 &&
+    signal.paid_orders === 0 &&
+    signal.checkouts === 0 &&
+    signal.carts < 3
+  ) {
+    await env.DB.prepare(
+      `UPDATE targeting_recommendations
+       SET status = 'superseded',
+           priority = 'low',
+           buyer_intent_score = ?,
+           confidence = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND recommendation_type = 'category_intent'
+         AND status IN ('open', 'pending_approval', 'superseded')`,
+    )
+      .bind(signal.buyer_intent_score, signal.confidence, recId)
+      .run();
 
-  return 0;
-}
+    return 0;
+  }
 
   const priority =
-    signal.checkouts >= 3 || signal.buyer_intent_score >= 80
+    signal.paid_orders >= 2 || signal.buyer_intent_score >= 80
       ? 'high'
-      : signal.carts >= 2 || signal.buyer_intent_score >= 65
+      : signal.paid_orders >= 1 ||
+          signal.checkouts >= 1 ||
+          signal.carts >= 2 ||
+          signal.buyer_intent_score >= 65
         ? 'medium'
         : 'low';
 
   const audienceCluster = categoryAudienceCluster(signal.product_category);
+  const hasOrderProof = signal.paid_orders > 0 || signal.paid_revenue > 0;
 
   const reasons = [
-    `${signal.events} catalogue product-intent event(s) found for ${signal.product_category}.`,
-    `${signal.carts} add-to-cart and ${signal.checkouts} checkout-started signal(s).`,
-    `${signal.customers} unique customer(s) interacted with this category.`,
-    signal.checkouts > 0
-      ? 'Checkout-started signal exists, so this category deserves retargeting priority.'
-      : 'No checkout proof yet; keep this as a soft intent audience.',
+    `${signal.events} buyer event(s) found for ${signal.product_category}.`,
+    `${signal.product_views} view(s), ${signal.carts} cart(s), ${signal.checkouts} checkout-started signal(s).`,
+    `${signal.paid_orders} paid order(s), Rs. ${round(signal.paid_revenue)} paid revenue.`,
+    `${signal.customers} unique customer(s) showed category interest.`,
+    hasOrderProof
+      ? 'Revenue/order proof exists, so this category can move from soft intent to buyer-proof retargeting.'
+      : 'No paid-order proof yet; keep this as catalogue intent only.',
   ];
 
   await env.DB.prepare(
@@ -734,6 +766,7 @@ if (
     DO UPDATE SET
       recommendation_type = excluded.recommendation_type,
       priority = excluded.priority,
+      status = 'open',
       title = excluded.title,
       description = excluded.description,
       product_category = excluded.product_category,
@@ -752,25 +785,42 @@ if (
     .bind(
       recId,
       priority,
-      `Retarget ${signal.product_category} catalogue intent`,
-      `${signal.product_category} is showing buyer intent from catalogue activity. Build a retargeting test around viewers, carts, and checkout starters.`,
+      hasOrderProof
+        ? `Retarget ${signal.product_category} buyer proof`
+        : `Retarget ${signal.product_category} catalogue intent`,
+      hasOrderProof
+        ? `${signal.product_category} has catalogue intent plus paid-order proof. Build a tighter retargeting test around proven buyers and checkout starters.`
+        : `${signal.product_category} is showing catalogue intent. Build a soft retargeting test around viewers, carts, and checkout starters.`,
       signal.product_category,
       audienceCluster,
       signal.buyer_intent_score,
       signal.confidence,
-      'create_catalogue_retargeting_test',
-      priority === 'high' ? 500 : 300,
-      'Pause this retargeting test if spend crosses Rs. 500 with no WhatsApp/order signal.',
-      'Scale only after catalogue retargeting produces WhatsApp/order/revenue proof.',
+      hasOrderProof
+        ? 'create_revenue_proven_retargeting_test'
+        : 'create_catalogue_retargeting_test',
+      priority === 'high' ? 700 : priority === 'medium' ? 400 : 250,
+      hasOrderProof
+        ? 'Pause if spend crosses Rs. 700 without repeat WhatsApp/order signal.'
+        : 'Pause this retargeting test if spend crosses Rs. 500 with no WhatsApp/order signal.',
+      hasOrderProof
+        ? 'Scale only if order/revenue proof stays stable for 2 days.'
+        : 'Scale only after catalogue retargeting produces WhatsApp/order/revenue proof.',
       JSON.stringify({
         source: 'sheet',
-        signal_type: 'catalogue_category_intent',
+        signal_type: hasOrderProof
+          ? 'catalogue_plus_order_category_proof'
+          : 'catalogue_category_intent',
         product_category: signal.product_category,
         events: signal.events,
         customers: signal.customers,
         product_views: signal.product_views,
         carts: signal.carts,
         checkouts: signal.checkouts,
+        order_created: signal.order_created,
+        paid_orders: signal.paid_orders,
+        paid_revenue: signal.paid_revenue,
+        refunds: signal.refunds,
+        cancelled: signal.cancelled,
         total_value: signal.total_value,
         top_products: signal.top_products,
       }),
@@ -780,6 +830,7 @@ if (
 
   return 1;
 }
+
 
 async function upsertSheetProductAffinityFromEvents(
   env: Env,
@@ -792,6 +843,11 @@ async function upsertSheetProductAffinityFromEvents(
       SUM(CASE WHEN event_type = 'product_view' THEN 1 ELSE 0 END) AS product_views,
       SUM(CASE WHEN event_type = 'add_to_cart' THEN 1 ELSE 0 END) AS carts,
       SUM(CASE WHEN event_type = 'checkout_started' THEN 1 ELSE 0 END) AS checkouts,
+      SUM(CASE WHEN event_type = 'order_created' THEN 1 ELSE 0 END) AS order_created,
+      SUM(CASE WHEN event_type = 'order_paid' THEN 1 ELSE 0 END) AS paid_orders,
+      SUM(CASE WHEN event_type = 'order_paid' THEN COALESCE(event_value, 0) ELSE 0 END) AS paid_revenue,
+      SUM(CASE WHEN event_type = 'refund_created' THEN 1 ELSE 0 END) AS refunds,
+      SUM(CASE WHEN event_type = 'order_cancelled' THEN 1 ELSE 0 END) AS cancelled,
       SUM(event_value) AS total_value,
       SUM(intent_weight) AS intent_score,
       AVG(confidence) AS avg_confidence
@@ -801,7 +857,15 @@ async function upsertSheetProductAffinityFromEvents(
       AND product_category != ''
       AND product_category NOT IN ('Jewellery', 'All Jewellery')
       AND product_category NOT LIKE '%,%'
-      AND event_type IN ('product_view', 'add_to_cart', 'checkout_started')
+      AND event_type IN (
+        'product_view',
+        'add_to_cart',
+        'checkout_started',
+        'order_created',
+        'order_paid',
+        'order_cancelled',
+        'refund_created'
+      )
     GROUP BY product_category
     ORDER BY SUM(intent_weight) DESC
     LIMIT 50`,
@@ -819,12 +883,23 @@ async function upsertSheetProductAffinityFromEvents(
       product_views: n(r.product_views),
       carts: n(r.carts),
       checkouts: n(r.checkouts),
+      order_created: n(r.order_created),
+      paid_orders: n(r.paid_orders),
+      paid_revenue: n(r.paid_revenue),
+      refunds: n(r.refunds),
+      cancelled: n(r.cancelled),
       total_value: n(r.total_value),
     };
 
     const buyerIntentScore = round(scoreSheetCategorySignal(baseSignal));
     const confidence = round(
-      clamp(n(r.avg_confidence) + Math.min(10, baseSignal.customers), 50, 95),
+      clamp(
+        n(r.avg_confidence) +
+          Math.min(10, baseSignal.customers) +
+          Math.min(8, baseSignal.paid_orders * 2),
+        50,
+        98,
+      ),
     );
 
     const signal: SheetCategorySignal = {
@@ -841,10 +916,18 @@ async function upsertSheetProductAffinityFromEvents(
     };
 
     const reasons = [
-      `${signal.events} catalogue event(s) for ${signal.product_category}.`,
+      `${signal.events} buyer event(s) for ${signal.product_category}.`,
       `${signal.product_views} product view(s), ${signal.carts} cart(s), ${signal.checkouts} checkout-started event(s).`,
-      `${signal.customers} unique customer(s) showed category interest.`,
+      `${signal.paid_orders} paid order(s), Rs. ${round(signal.paid_revenue)} paid revenue.`,
+      signal.refunds + signal.cancelled > 0
+        ? `${signal.refunds} refund(s), ${signal.cancelled} cancelled order(s) detected.`
+        : 'No refund/cancellation drag detected.',
     ];
+
+    const insight =
+      signal.paid_orders > 0
+        ? `${signal.product_category} is scoring ${signal.buyer_intent_score}/100 with ${signal.paid_orders} paid order(s), Rs. ${round(signal.paid_revenue)} revenue, ${signal.carts} carts and ${signal.checkouts} checkout starts.`
+        : `${signal.product_category} is scoring ${signal.buyer_intent_score}/100 from catalogue behaviour: ${signal.carts} carts and ${signal.checkouts} checkout starts.`;
 
     await env.DB.prepare(
       `INSERT INTO product_affinity_scores (
@@ -852,7 +935,7 @@ async function upsertSheetProductAffinityFromEvents(
         spend, revenue, roas, clicks, impressions, conversions,
         best_campaign_id, insight, reasons_json,
         calculated_at, updated_at
-      ) VALUES (?, ?, 'sheet', ?, 0, 0, 0, ?, 0, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, 'sheet', ?, 0, ?, 0, ?, 0, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(product_category, source)
       DO UPDATE SET
         buyer_intent_score = excluded.buyer_intent_score,
@@ -872,9 +955,10 @@ async function upsertSheetProductAffinityFromEvents(
         id('pas', signal.product_category, 'sheet'),
         signal.product_category,
         signal.buyer_intent_score,
+        round(signal.paid_revenue),
         Math.round(signal.events),
-        Math.round(signal.carts + signal.checkouts),
-        `${signal.product_category} is scoring ${signal.buyer_intent_score}/100 from catalogue behaviour: ${signal.carts} carts and ${signal.checkouts} checkout starts.`,
+        Math.round(signal.carts + signal.checkouts + signal.paid_orders),
+        insight,
         JSON.stringify({ reasons, signal }),
       )
       .run();

@@ -920,14 +920,25 @@ app.post('/sheets/import', async (c) => {
       );
     }
 
-    const dryRun = sheetBool(c.req.query('dry_run'), true);
-    const limit = sheetLimit(c.req.query('limit'), 500000, 500000);
 
-    const catalogueRows = await readSheetRows(
+
+const dryRun = sheetBool(c.req.query('dry_run'), true);
+const includeOrders = sheetBool(c.req.query('include_orders'), false);
+const limit = sheetLimit(c.req.query('limit'), 500000, 500000);
+
+const catalogueRows = await readSheetRows(
+  c.env as unknown as SheetsEnv,
+  'Catalogue Events',
+  'A:P',
+);
+
+const orderRows = includeOrders
+  ? await readSheetRows(
       c.env as unknown as SheetsEnv,
-      'Catalogue Events',
-      'A:P',
-    );
+      'Orders',
+      'A:AI',
+    )
+  : [];
 
     const headers = catalogueRows[0] || [];
 
@@ -941,6 +952,21 @@ app.post('/sheets/import', async (c) => {
         row_number: startRowIndex + index + 1,
         ...sheetObj(headers, row),
       }));
+
+const orderHeaders = orderRows[0] || [];
+const orderRowCount = Math.max(0, orderRows.length - 1);
+const orderStartRowIndex = Math.max(
+  1,
+  orderRows.length - Math.min(limit, orderRowCount),
+);
+
+const orderObjects = orderRows
+  .slice(1)
+  .slice(-limit)
+  .map((row, index) => ({
+    row_number: orderStartRowIndex + index + 1,
+    ...sheetObj(orderHeaders, row),
+  }));
 
 const skuCategoryMap = new Map<string, string>();
 const skuNameMap = new Map<string, string>();
@@ -982,15 +1008,26 @@ const productCategory =
 
       const phoneHash = await sha256Hex(r.phone || '');
 
-      const eventValue = positiveCatalogueValue(r.event_type || '', r);
+  const eventValue = positiveCatalogueValue(r.event_type || '', r);
 
-      events.push({
-        source_ref: sheetRefSafe(
-          `catalogue_${r.row_number}_${r.created_at}_${r.customer_id}_${r.event_type}_${productSku || productCategory || r.source}`,
-        ),
+const sourceRef = sheetRefSafe(
+  [
+    'catalogue',
+    r.row_number,
+    r.created_at,
+    r.customer_id,
+    r.event_type,
+    productSku || productCategory || r.source || '',
+  ].join('_'),
+);
 
-        event_type: mappedType,
-        event_time: sheetTimeToIso(r.created_at || ''),
+events.push({
+  source_ref: sourceRef,
+
+  event_type: mappedType,
+  event_time: sheetTimeToIso(r.created_at || ''),
+
+
 
         customer_key: r.customer_id || phoneHash || '',
         phone_hash: phoneHash,
@@ -1026,6 +1063,115 @@ const productCategory =
       });
     }
 
+let orderEventsPrepared = 0;
+
+if (includeOrders) {
+  for (const r of orderObjects) {
+    const orderId = String(
+      r.order_id || r.id || r.name || r.row_number || '',
+    ).trim();
+
+    if (!orderId) continue;
+
+const eventType = mapSheetOrderEventType(
+  r.status || r.order_status || '',
+  r.payment_status || '',
+);
+
+// Sheet order_created is noisy/pending proof, not revenue proof.
+// Keep Phase 2A strict: paid/refund/cancel only.
+if (eventType === 'order_created') {
+  continue;
+}
+
+const amount =
+  Number(
+    r.total ||
+      r.grand_total ||
+      r.amount ||
+      r.order_total ||
+      r.subtotal ||
+      0,
+  ) || 0;
+
+    if (
+      (eventType === 'order_paid' || eventType === 'refund_created') &&
+      amount <= 0
+    ) {
+      continue;
+    }
+
+    const phoneHash = await sha256Hex(r.phone || '');
+
+    const productSku = String(
+      r.sku ||
+        r.product_sku ||
+        r.item_skus ||
+        r.items_sku ||
+        '',
+    ).trim();
+
+    const productCategory = normalizeProductCategory(
+      r.category ||
+        r.product_category ||
+        skuCategoryMap.get(productSku) ||
+        '',
+    );
+
+    const productName = String(
+      r.product_name ||
+        r.item_names ||
+        r.items_summary ||
+        skuNameMap.get(productSku) ||
+        '',
+    ).trim();
+
+    events.push({
+source_ref: sheetRefSafe(
+  ['order', r.row_number, orderId, eventType].join('_'),
+),
+
+      event_type: eventType,
+      event_time: sheetTimeToIso(
+        r.paid_at || r.created_at || r.updated_at || '',
+      ),
+
+      customer_key: r.customer_id || phoneHash || '',
+      phone_hash: phoneHash,
+
+      campaign_id: maybeExtractMetaId(
+        r.utm_campaign || r.campaign_id || r.source || '',
+      ),
+      campaign_name: r.utm_campaign || r.source || '',
+      adset_id: '',
+      adset_name: '',
+      ad_id: '',
+      ad_name: '',
+      creative_id: '',
+
+      product_sku: productSku,
+      product_category: productCategory,
+      product_name: productName,
+
+      event_value: Math.max(amount, 1),
+      currency: 'INR',
+      confidence: eventType === 'order_paid' ? 95 : 82,
+
+      sheet_tab: 'Orders',
+      sheet_row_number: r.row_number,
+      order_id: orderId,
+      order_status_raw: r.status || r.order_status || '',
+      payment_status_raw: r.payment_status || '',
+      sheet_source: r.source || '',
+
+      privacy_note:
+        'Raw phone/name are intentionally not stored in buyer_events. phone_hash/customer_key only.',
+    });
+
+    orderEventsPrepared += 1;
+  }
+}
+
 let inserted = 0;
 let updated = 0;
 let upserted = 0;
@@ -1041,7 +1187,9 @@ if (!dryRun) {
       success: true,
       data: {
         mode: dryRun ? 'dry_run_no_db_writes' : 'imported_to_buyer_events',
-        importer: 'catalogue_events_only_phase_1',
+        importer: includeOrders
+  ? 'catalogue_events_plus_orders_phase_2A'
+  : 'catalogue_events_only_phase_1',
         limit,
         prepared: events.length,
 inserted,
@@ -1050,8 +1198,14 @@ upserted,
 batches,
 write_mode: dryRun ? 'none' : 'batch_insert_or_replace',
 skipped: 0,
-        imported_tabs: ['Catalogue Events'],
-        ignored_tabs: ['Orders', 'Sales', 'Customers', 'Leads'],
+catalogue_events_prepared: rows.length,
+order_events_prepared: orderEventsPrepared,
+imported_tabs: includeOrders
+  ? ['Catalogue Events', 'Orders']
+  : ['Catalogue Events'],
+ignored_tabs: includeOrders
+  ? ['Sales', 'Customers', 'Leads']
+  : ['Orders', 'Sales', 'Customers', 'Leads'],
         min_event_value: events.reduce(
           (min, e) => Math.min(min, Number(e.event_value || 1)),
           events.length ? Number(events[0].event_value || 1) : 1,
@@ -1062,8 +1216,9 @@ skipped: 0,
           return acc;
         }, {}),
         sample_events: events.slice(0, 10),
-        warning:
-          'Phase 1 imports Catalogue Events only. Sales/order proof will be added later after intent loop is validated.',
+warning: includeOrders
+  ? 'Phase 2A imports Catalogue Events + Orders. Sales tab is not imported yet to avoid revenue double-counting.'
+  : 'Phase 1 imports Catalogue Events only.',
       },
     });
   } catch (err: any) {
